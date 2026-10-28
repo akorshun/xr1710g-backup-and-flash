@@ -21,9 +21,11 @@
 
     Режим Backup выполняет шаги 1-2 и перезагружает роутер в сток.
     Режим Restore возвращает сток из такой копии.
+    Режим Loader выполняет только шаг 4: дописать слот и bootcmd, если Install
+    прервался после разметки UBI, или сменить загрузчик на уже прошитом роутере.
 
 .PARAMETER Mode
-    Install (по умолчанию), Backup или Restore.
+    Install (по умолчанию), Backup, Restore или Loader.
 .PARAMETER Loader
     http - U-Boot с HTTP-рекавери YYH2913; openwrt - чейнлоадер U-Boot OpenWrt.
     Без параметра скрипт спросит.
@@ -41,10 +43,12 @@
     .\xr1710g-flash.ps1 -Mode Backup
 .EXAMPLE
     .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
+.EXAMPLE
+    .\xr1710g-flash.ps1 -Mode Loader -Loader openwrt
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Install', 'Backup', 'Restore')]
+    [ValidateSet('Install', 'Backup', 'Restore', 'Loader')]
     [string]$Mode = 'Install',
     [ValidateSet('', 'http', 'openwrt')]
     [string]$Loader = '',
@@ -576,7 +580,8 @@ function Learn-Prompt {
 function Invoke-Uboot([string]$cmd, [int]$timeout = 20, [switch]$NoFail) {
     $m = $script:C.Mark()
     $script:C.Send("$cmd`r")
-    $re = '\n' + [regex]::Escape($script:Prompt) + '[ \t]*\z'
+    # стоковый 'flash write' печатает точки и приглашение без перевода строки
+    $re = '(?:\n|\.)' + [regex]::Escape($script:Prompt) + '[ \t]*\z'
     $end = $script:C.WaitFor($re, $m + $cmd.Length, (Scale $timeout))
     $out = $script:C.Since($m)
     Write-Log "U-Boot> $cmd`n$out"
@@ -943,6 +948,24 @@ function Set-Bootcmd([string]$kind) {
     }
 }
 
+# Слот, bootcmd и первая загрузка OpenWrt - из уже остановленного стокового U-Boot.
+function Complete-Loader([string]$kind) {
+    if ($kind -eq 'http') {
+        Write-Slot (Join-Path $FwDir $Files.HttpUboot) 'http-uboot (xr1710g-chainloader-slot.bin)'
+    } else {
+        Write-Slot (Join-Path $FwDir $Files.OpenWrtUboot) 'U-Boot OpenWrt (chainload-uboot.itb)'
+    }
+    Set-Bootcmd $kind
+    Wait-OpenWrt
+    Say 'Готово.'
+    Info "OpenWrt: http://$RouterIp (root без пароля - задайте пароль)"
+    if ($kind -eq 'http') {
+        Info 'Рекавери: кабель в порт 10GbE, держать reset при включении -> http://192.168.255.1'
+    } else {
+        Info 'Рекавери: меню U-Boot в UART (TFTP / recovery из флеша)'
+    }
+}
+
 function Wait-OpenWrt {
     Say 'Перезагрузка в OpenWrt'
     $m = $script:C.Mark()
@@ -1041,6 +1064,15 @@ try {
         $kind = Select-Loader
         Info "загрузчик: $kind"
     }
+    if ($Mode -eq 'Loader') {
+        $kind = Select-Loader
+        Info "загрузчик: $kind"
+        Confirm-Step @"
+В слот chainloader (0x600000) запишется загрузчик '$kind', bootcmd стокового U-Boot
+будет настроен под него. Область ubi не трогается: OpenWrt в разметке UBI 2.0 уже
+должен быть установлен (режим Install дошёл до записи загрузчика).
+"@
+    }
     if ($Mode -eq 'Restore') {
         foreach ($f in @('mtd1-chainloader.bin', 'mtd2-ubi.bin', 'stock-uboot-env.txt', 'SHA256SUMS')) {
             if (-not (Test-Path (Join-Path $BackupDir $f))) { Fail "в $BackupDir нет $f" }
@@ -1081,11 +1113,15 @@ try {
 "@ -ForegroundColor Green
     Enter-StockUboot 'Включите питание роутера (если включён - выключите и включите)'
     $envText = Invoke-Uboot 'printenv' 30
-    if ($Mode -ne 'Restore') {
+    if ($Mode -in 'Install', 'Backup') {
         Set-Content -LiteralPath (Join-Path $BackupDir 'stock-uboot-env.txt') -Encoding UTF8 `
             -Value (($envText -replace "`r", '') -split "`n" | Where-Object { $_ -match '^[A-Za-z0-9_.]+=' })
     }
     if ($envText -notmatch 'AXON|ecnt') { Warn 'в окружении нет AXON/ecnt - точно ли это стоковый загрузчик XR1710G?' }
+    if ($Mode -eq 'Loader') {
+        Complete-Loader $kind
+        return
+    }
     Enter-RamLinux
 
     if ($Mode -eq 'Restore') {
@@ -1131,20 +1167,7 @@ try {
     Install-Ubi $BackupDir $sysupgrade
     $m = Restart-ToStock
     Enter-StockUboot 'Перезагрузка в стоковый U-Boot для записи загрузчика' $m
-    if ($kind -eq 'http') {
-        Write-Slot (Join-Path $FwDir $Files.HttpUboot) 'http-uboot (xr1710g-chainloader-slot.bin)'
-    } else {
-        Write-Slot (Join-Path $FwDir $Files.OpenWrtUboot) 'U-Boot OpenWrt (chainload-uboot.itb)'
-    }
-    Set-Bootcmd $kind
-    Wait-OpenWrt
-    Say 'Готово.'
-    Info "OpenWrt: http://$RouterIp (root без пароля - задайте пароль)"
-    if ($kind -eq 'http') {
-        Info 'Рекавери: кабель в порт 10GbE, держать reset при включении -> http://192.168.255.1'
-    } else {
-        Info 'Рекавери: меню U-Boot в UART (TFTP / recovery из флеша)'
-    }
+    Complete-Loader $kind
     Info "Копия стока: $BackupDir"
 }
 catch {

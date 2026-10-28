@@ -77,7 +77,18 @@ Check 'openwrt: slot written' (@(Compare-Object (Get-Head "$s\mtd1.bin" 0 $owrt.
 Check 'openwrt: bootcmd' ((Get-Env $s).bootcmd -eq 'flash read 0x600000 0x100000 $loadaddr; bootm')
 Stop-Process $r -ErrorAction SilentlyContinue
 
-# 4. Restore the stock from backup 3 onto the router of test 3
+# 4. Loader only: switch the router of test 2 from http-uboot to the OpenWrt loader
+$s = "$Work\state-http"
+$r = Start-Router $s 7006
+$ubi = (Get-FileHash "$s\mtd2.bin").Hash
+$rc = Invoke-Flash 'loader openwrt' $s 7006 @('-Mode', 'Loader', '-Loader', 'openwrt', '-BackupDir', "$Work\bk6")
+Check 'loader: exit code 0' ($rc -eq 0)
+Check 'loader: slot written' (@(Compare-Object (Get-Head "$s\mtd1.bin" 0 $owrt.Length) $owrt -SyncWindow 0).Count -eq 0)
+Check 'loader: bootcmd' ((Get-Env $s).bootcmd -eq 'flash read 0x600000 0x100000 $loadaddr; bootm')
+Check 'loader: ubi untouched' ((Get-FileHash "$s\mtd2.bin").Hash -eq $ubi)
+Stop-Process $r -ErrorAction SilentlyContinue
+
+# 5. Restore the stock from backup 3 onto the router of test 3
 $r = Start-Router $s 7004
 $rc = Invoke-Flash 'restore' $s 7004 @('-Mode', 'Restore', '-BackupDir', "$Work\bk3")
 Check 'restore: exit code 0' ($rc -eq 0)
@@ -87,7 +98,7 @@ Check 'restore: ubi back to stock' ((Get-FileHash "$s\mtd2.bin").Hash -eq (Get-F
 Check 'restore: bootcmd back to stock' ((Get-Env $s).bootcmd -eq 'flash read 0x602100 0x4000000 $loadaddr; bootm')
 Stop-Process $r -ErrorAction SilentlyContinue
 
-# 5. A sysupgrade with the UBI 1.0 layout is refused before anything runs
+# 6. A sysupgrade with the UBI 1.0 layout is refused before anything runs
 $bad = "$Work\ubi10.itb"
 $b = [IO.File]::ReadAllBytes("$Root\firmware\openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb")
 $l1 = [Text.Encoding]::GetEncoding(28591)

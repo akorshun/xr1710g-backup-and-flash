@@ -84,6 +84,7 @@
 .\xr1710g-flash.ps1 -ComPort COM5 -Loader http   # без вопросов о порте и загрузчике
 .\xr1710g-flash.ps1 -Mode Backup                 # только копия стока, флеш не трогается
 .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
+.\xr1710g-flash.ps1 -Mode Loader -Loader openwrt   # только слот + bootcmd (см. ниже)
 .\xr1710g-flash.ps1 -Firmware D:\my-sysupgrade.itb   # своя сборка OpenWrt
 ```
 
@@ -169,6 +170,18 @@ OpenWrt для W1700K: этот загрузчик читает слот чер�
 (`mtd write`), затем стоковым загрузчиком вернёт `mtd1-chainloader.bin` в слот и
 `bootcmd` из `stock-uboot-env.txt`. Если с момента копии во флеше появились
 новые плохие блоки, побайтного совпадения не будет — скрипт предупредит.
+
+### Только загрузчик (`-Mode Loader`)
+
+```powershell
+.\xr1710g-flash.ps1 -Mode Loader -Loader openwrt   # или -Loader http
+```
+
+Последний шаг установки отдельно: стоковым U-Boot записать выбранный загрузчик в
+слот `0x600000`, настроить `bootcmd` и дождаться OpenWrt. Область `ubi` не
+трогается, копия не снимается. Нужен, если Install оборвался после разметки
+UBI 2.0 (в журнале есть «UBI 2.0 размечен»), а также чтобы сменить
+http-uboot на загрузчик OpenWrt или обратно.
 
 ## Разметка UBI 2.0
 
@@ -287,7 +300,7 @@ reset
 ## Тесты
 
 ```powershell
-.\tests\run-fake.ps1          # сквозной прогон на эмуляторе: Backup, Install x2, Restore, отказ UBI 1.0
+.\tests\run-fake.ps1          # сквозной прогон на эмуляторе: Backup, Install x2, Loader, Restore, отказ UBI 1.0
 ```
 
 ```sh

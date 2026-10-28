@@ -332,10 +332,11 @@ class Router:
             off, ln = int(w[2], 16), int(w[3], 16)
             if w[1] == "erase":
                 self.flash_rw(off, ln, b"\xff" * ln)
-                self.out("Erase from %#x len %#x OK\n" % (off, ln))
+                self.out("erase: addr=%#x, len=%#x\n" % (off, ln))
             elif w[1] == "write":
                 self.flash_rw(off, ln, self.ram_get(int(w[4], 16), ln))
-                self.out("Write to %#x len %#x OK\n" % (off, ln))
+                # as the real AXON U-Boot: progress dots, then the prompt on the same line
+                self.out("write: src=%s, len=%#x, dst=%#x\n" % (w[4], ln, off) + "." * 25)
             elif w[1] == "read":
                 self.ram_put(int(w[4], 16), self.flash_rw(off, ln))
                 self.out("Read from %#x len %#x OK\n" % (off, ln))
