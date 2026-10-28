@@ -834,9 +834,9 @@ function New-Factory([string]$vendorFile, [string]$outFile, [int]$eraseSize = 0x
     $eeprom = -1
     for ($i = 0; $i -lt 4; $i++) {
         $o = 0x405000 + $i * $eraseSize
-        if ($v[$o] -eq 0x79 -and $v[$o + 1] -eq 0x90) { $eeprom = $o; break }
+        if ($v[$o] -eq 0x90 -and $v[$o + 1] -eq 0x79) { $eeprom = $o; break }
     }
-    if ($eeprom -lt 0) { Fail 'EEPROM Wi-Fi (магия 7990) не найдена в vendor с 0x405000' }
+    if ($eeprom -lt 0) { Fail 'EEPROM Wi-Fi (магия 0x7990, байты 90 79) не найдена в vendor с 0x405000' }
     $blob = New-Object byte[] 0x10000
     [Array]::Copy($v, $eeprom, $blob, 0, 0x1e00)
     $put = {

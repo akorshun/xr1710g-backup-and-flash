@@ -43,7 +43,7 @@ def init_state():
     dsd = (b"wan_mac=02:11:22:33:44:50\0lan_mac=02:11:22:33:44:51\0"
            b"fan_id=1\0serial_number=XR1710G0123456789\0")
     v[0x400000:0x401000] = dsd.ljust(0x1000, b"\xff")
-    v[0x405000:0x405002] = b"\x79\x90"
+    v[0x405000:0x405002] = b"\x90\x79"
     open(path("mtd0.bin"), "wb").write(v)
     open(path("mtd1.bin"), "wb").write(b"\x27\x05\x19\x56STOCK" + rnd.randbytes(0x100000 - 9))
     with open(path("mtd2.bin"), "wb") as f:

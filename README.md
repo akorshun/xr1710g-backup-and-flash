@@ -262,7 +262,7 @@ reset
   [openwrt/openwrt#22397](https://github.com/openwrt/openwrt/pull/22397);
   на этом основана ветка `main-gemtek-xr1710g`, из которой собраны образы.
 * **Установщик UBI**: тома `ubootenv`/`ubootenv2`/`factory`/`recovery`/`fit`,
-  поиск EEPROM (магия `7990` с 0x405000), поля DSD `wan_mac`, `lan_mac`,
+  поиск EEPROM (магия 0x7990, little-endian — байты `90 79`, с 0x405000), поля DSD `wan_mac`, `lan_mac`,
   `fan_id`, `serial_number` и раскладка тома `factory` —
   [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer)
   (GPL-3.0), который в свою очередь основан на

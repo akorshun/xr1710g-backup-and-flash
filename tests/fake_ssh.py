@@ -86,7 +86,7 @@ elif cmd.startswith("sh /tmp/xr/install-ubi.sh "):
         if not os.path.exists(tmpfile(f)):
             fail("[xr1710g] ERROR: missing file: " + f, 1)
     fac = open(tmpfile(files[0]), "rb").read()
-    assert len(fac) == 0x10000 and fac[:2] == b"\x79\x90", "bad factory.bin"
+    assert len(fac) == 0x10000 and fac[:2] == b"\x90\x79", "bad factory.bin"
     assert fac[0x5000:0x5006] == bytes.fromhex("021122334450"), "bad WAN MAC"
     assert fac[0x6000:0x6006] == bytes.fromhex("021122334451"), "bad LAN MAC"
     assert fac[0x8000:0x8000 + 17] == b"XR1710G0123456789", "bad serial"
