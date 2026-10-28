@@ -2,20 +2,27 @@
 """Make the read-only "backup" initramfs for the XR1710G from an OpenWrt
 initramfs-recovery.itb.
 
-The only change: in the device tree inside the FIT, the "ubi" partition loses
-its `compatible = "linux,ubi"` (the value becomes "no-attach"), so the kernel
-does not attach UBI on its own. On a stock router that area holds the vendor
-firmware banks, not UBI, and an attach is not something to try before the
-backup is taken. Every other byte stays as built by OpenWrt; the crc32/sha1
-hashes of the fdt image are recomputed so U-Boot accepts the FIT.
+Two changes in the device tree inside the FIT, both keeping every size:
 
-The new value has the same length as the old one, so the device tree and the
-FIT keep their sizes and layout.
+* the "ubi" partition loses its `compatible = "linux,ubi"` (the value becomes
+  "no-attach"), so the kernel does not attach UBI through the DT. On a stock
+  router that area holds the vendor firmware banks, not UBI, and an attach is
+  not something to try before the backup is taken;
+* the Ethernet MACs (/soc/ethernet@*/ethernet@*) lose `nvmem-cells` and
+  `nvmem-cell-names`: they point into the "factory" UBI volume, which a stock
+  router does not have, and the Ethernet driver would wait for it forever
+  (deferred probe), leaving the initramfs without network. The properties are
+  renamed to "cells"/"cell-names" by pointing their names at the tail of the
+  same strings, so the driver falls back to a random MAC.
+
+Every other byte stays as built by OpenWrt; the crc32/sha1 hashes of the fdt
+image are recomputed so U-Boot accepts the FIT.
 
   make-backup-initramfs.py IN.itb OUT.itb    write the patched image
   make-backup-initramfs.py --check IMG.itb   show the ubi partition and hashes
 """
 import hashlib
+import re
 import struct
 import sys
 import zlib
@@ -24,6 +31,18 @@ FDT_MAGIC = 0xD00DFEED
 OLD = b"linux,ubi\0"
 NEW = b"no-attach\0"
 UBI_REG = struct.pack(">II", 0x00700000, 0x1B700000)  # UBI 2.0
+
+
+RENAME = {"nvmem-cells": "cells", "nvmem-cell-names": "cell-names"}
+
+
+def eth_mac_props(fit, dtb_off):
+    """(path, name, name-offset position) of nvmem props of the Ethernet MACs."""
+    out = []
+    for path, name, off, ln in walk(fit, dtb_off):
+        if re.fullmatch(r"/soc/ethernet@[0-9a-f]+/ethernet@\d+", path) and name in RENAME:
+            out.append((path, name, off - 4))
+    return out
 
 
 def walk(buf, base):
@@ -92,6 +111,8 @@ def describe(fit):
     print("partition : %s" % node)
     print("reg       : %s" % fit[reg[0]:reg[0] + reg[1]].hex())
     print("compatible: %s" % (fit[comp[0]:comp[0] + comp[1]] if comp else None))
+    left = eth_mac_props(fit, doff)
+    print("eth nvmem  : %s" % (", ".join("%s:%s" % (p, n) for p, n, _ in left) or "none"))
     blob = fit[doff:doff + dlen]
     ok = True
     for algo, (off, ln) in sorted(hashes.items()):
@@ -114,6 +135,16 @@ def patch(src, dst):
     if set(hashes) - {"crc32", "sha1"} or not hashes:
         raise SystemExit("%s: unexpected fdt hash algorithms %s" % (src, sorted(hashes)))
     fit[comp[0]:comp[0] + comp[1]] = NEW
+    macs = eth_mac_props(fit, doff)
+    if not macs:
+        raise SystemExit("%s: no nvmem MAC properties on the Ethernet nodes" % src)
+    _m, _t, _os, off_strings = struct.unpack_from(">4I", fit, doff)
+    for path, name, pos in macs:
+        nameoff, = struct.unpack_from(">I", fit, pos)
+        new = nameoff + len(name) - len(RENAME[name])
+        s0 = doff + off_strings + new
+        assert fit[s0:fit.index(b"\0", s0)].decode() == RENAME[name]
+        struct.pack_into(">I", fit, pos, new)
     blob = bytes(fit[doff:doff + dlen])
     for algo, (off, ln) in hashes.items():
         val = (struct.pack(">I", zlib.crc32(blob) & 0xFFFFFFFF) if algo == "crc32"

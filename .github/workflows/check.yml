@@ -22,7 +22,8 @@ jobs:
           python3 tools/make-backup-initramfs.py \
             firmware/openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb /tmp/backup.itb
           cmp /tmp/backup.itb firmware/xr1710g-backup-initramfs.itb
-          python3 tools/make-backup-initramfs.py --check firmware/xr1710g-backup-initramfs.itb
+          python3 tools/make-backup-initramfs.py --check firmware/xr1710g-backup-initramfs.itb | tee /tmp/check.txt
+          grep -q "eth nvmem  : none" /tmp/check.txt
 
       - name: shellcheck
         run: shellcheck -s sh router/install-ubi.sh tests/test-install-ubi.sh

@@ -114,10 +114,17 @@
 | `reset`, ожидание OpenWrt, проверка `board_name` | — | нет |
 
 `xr1710g-backup-initramfs.itb` — это `initramfs-recovery.itb` из той же сборки
-OpenWrt с одним изменением в DTB: у раздела `ubi` убран `compatible =
-"linux,ubi"`, чтобы ядро не пыталось подключить UBI поверх стоковых данных до
-того, как с них снята копия (см. `tools/make-backup-initramfs.py`, изменяется
-33 байта, хеши FIT пересчитаны). Кроме того, ядро OpenWrt подключает раздел с
+OpenWrt с двумя изменениями в DTB (см. `tools/make-backup-initramfs.py`,
+изменяется 39 байт, размеры не меняются, хеши FIT пересчитаны):
+
+* у раздела `ubi` убран `compatible = "linux,ubi"`, чтобы ядро не пыталось
+  подключить UBI поверх стоковых данных до того, как с них снята копия;
+* у MAC-узлов Ethernet (`gdm1`, `gdm2`, `gdm4`) отключены `nvmem-cells`: они
+  ссылаются на том `factory` в UBI, которого на стоке нет, и без этого драйвер
+  Ethernet бесконечно ждёт его (deferred probe) и сети в initramfs нет —
+  именно так было при первом запуске на железе. Без них MAC случайный.
+
+Кроме того, ядро OpenWrt подключает раздел с
 именем `ubi` само, если он начинается с `UBI#` (патч 490). На стоке там лежит
 банк `tclinux` и этого не происходит. Если роутер уже прошивали, скрипт
 предупредит, что копия будет не стоковой, и отключит UBI (`ubidetach`) перед
@@ -235,7 +242,7 @@ reset
 | `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r2`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r2) (коммит `ce11b1a79a`) | `1425540d…5dd3d9` |
 | `firmware/openwrt-…-initramfs-recovery.itb` | там же | `51acb98d…eedf3b` |
 | `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `23ef354d…84523f` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `e9a9ea68…f76111` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `dbf1b9f1…005758` |
 
 Полные суммы — в `firmware/SHA256SUMS`, скрипт сверяет их при каждом запуске.
 
