@@ -53,7 +53,7 @@ def init_state():
         f.truncate(0x4200000)
     json.dump(STOCK_ENV, open(path("env.json"), "w"))
     set_mode("off")
-    for f in ("reboot", "authorized", "installed"):
+    for f in ("reboot", "authorized", "installed", "detached"):
         if os.path.exists(path(f)):
             os.remove(path(f))
 
@@ -425,7 +425,7 @@ class Router:
             elif line.startswith('echo XR_""BOARD='):
                 self.out("XR_BOARD=gemtek,xr1710g-ubi\n")
         os.remove(path("reboot"))
-        for f in ("authorized",):
+        for f in ("authorized", "detached"):
             if os.path.exists(path(f)):
                 os.remove(path(f))
         self.out("[  100.000000] reboot: Restarting system\n")

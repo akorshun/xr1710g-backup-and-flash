@@ -51,6 +51,8 @@ def tmpfile(name):
 
 if cmd == "echo XR_SSH_OK":
     print("XR_SSH_OK")
+elif cmd.startswith("for b in /dev/ubiblock*;") and "ubidetach -m 2" in cmd:
+    open(path("detached"), "w").write("1")
 elif cmd.startswith("cat /proc/mtd"):
     print("dev:    size   erasesize  name")
     for i, (n, s) in enumerate(MTD):
@@ -59,6 +61,10 @@ elif cmd.startswith("cat /proc/mtd"):
         print("\ngemtek,xr1710g-ubi\nLinux OpenWrt 6.18.55 #0 SMP aarch64 GNU/Linux")
         for i, (n, s) in enumerate(MTD):
             print("mtd%d %s bad_blocks=0 ecc_failures=0" % (i, n))
+        # like OpenWrt's 490 patch: "ubi" is auto-attached if it starts with UBI#
+        if (open(path("mtd2.bin"), "rb").read(4) == b"UBI#"
+                and not os.path.exists(path("detached"))):
+            print("XR_UBI_ATTACHED")
         print("[    1.0] spi-nand spi0.0: Winbond SPI NAND was found.")
 elif re.fullmatch(r"cat /dev/mtd\d", cmd):
     with open(path(cmd[9:] + ".bin"), "rb") as f:
@@ -90,6 +96,9 @@ elif cmd.startswith("sh /tmp/xr/install-ubi.sh "):
     print("[xr1710g] ubiformat /dev/mtd2 (439 MiB)\n[xr1710g] read-back check")
     print("XR_INSTALL_OK")
 elif cmd == "mtd write - ubi 2>&1":
+    if (open(path("mtd2.bin"), "rb").read(4) == b"UBI#"
+            and not os.path.exists(path("detached"))):
+        fail("Could not open mtd device: ubi (busy, UBI attached)", 1)
     with open(path("mtd2.bin"), "r+b") as f:
         for b in iter(lambda: sys.stdin.buffer.read(1 << 20), b""):
             f.write(b)

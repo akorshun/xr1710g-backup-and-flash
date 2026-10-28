@@ -81,6 +81,7 @@ Stop-Process $r -ErrorAction SilentlyContinue
 $r = Start-Router $s 7004
 $rc = Invoke-Flash 'restore' $s 7004 @('-Mode', 'Restore', '-BackupDir', "$Work\bk3")
 Check 'restore: exit code 0' ($rc -eq 0)
+Check 'restore: attached UBI detached first' ((Get-Content "$Work\bk3\flash.log" -Raw) -match 'ubidetach -m 2')
 Check 'restore: slot back to stock' ((Get-FileHash "$s\mtd1.bin").Hash -eq (Get-FileHash "$Work\bk3\mtd1-chainloader.bin").Hash)
 Check 'restore: ubi back to stock' ((Get-FileHash "$s\mtd2.bin").Hash -eq (Get-FileHash "$Work\bk3\mtd2-ubi.bin").Hash)
 Check 'restore: bootcmd back to stock' ((Get-Env $s).bootcmd -eq 'flash read 0x602100 0x4000000 $loadaddr; bootm')

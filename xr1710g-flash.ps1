@@ -726,7 +726,9 @@ function Invoke-Ssh([string]$cmd, [int]$timeout = 60, [string]$In = $null, [stri
 }
 
 function Wait-Ssh {
-    if (-not $SshExe) { & arp.exe -d $RouterIp 2>$null | Out-Null }
+    # старая запись ARP для этого адреса (от U-Boot) мешает SSH; arp.exe пишет в stderr,
+    # если записи нет, а PowerShell 5.1 при ErrorActionPreference=Stop считает это ошибкой
+    if (-not $SshExe) { cmd.exe /c "arp -d $RouterIp >nul 2>&1" | Out-Null }
     $end = (Get-Date).AddSeconds(120)
     while ((Get-Date) -lt $end) {
         $r = Invoke-Ssh 'echo XR_SSH_OK' 15 -NoFail
@@ -747,6 +749,12 @@ function Test-MtdLayout([string]$procMtd) {
     }
 }
 
+# Отключить UBI от раздела ubi, чтобы ядро ничего не писало туда во время копии или записи.
+function Dismount-Ubi {
+    Invoke-Ssh 'for b in /dev/ubiblock*; do [ -e "$b" ] && ubiblock -r "/dev/ubi${b#/dev/ubiblock}"; done; ubidetach -m 2 2>/dev/null; [ ! -e /sys/class/ubi/ubi0 ]' 60 | Out-Null
+    Info 'UBI отключён от раздела ubi'
+}
+
 function Save-Flash([string]$dir) {
     Say "Снимаю копию всего флеша в $dir"
     $info = (Invoke-Ssh ('cat /proc/mtd; echo; cat /tmp/sysinfo/board_name; uname -a; ' +
@@ -754,7 +762,12 @@ function Save-Flash([string]$dir) {
         '[ -e /sys/class/ubi/ubi0 ] && echo XR_UBI_ATTACHED; dmesg | grep -i -E "spi-nand|nand|mtd|ubi" | head -50')).Out
     Set-Content -LiteralPath (Join-Path $dir 'router-info.txt') -Value $info -Encoding UTF8
     if ($info -notmatch 'gemtek,xr1710g') { Fail "initramfs сообщает не тот board_name:`n$info" }
-    if ($info -match 'XR_UBI_ATTACHED') { Fail 'UBI подключён ядром - это не initramfs для копии, дальше идти нельзя' }
+    if ($info -match 'XR_UBI_ATTACHED') {
+        # Ядро OpenWrt подключает раздел "ubi" само, если он начинается с UBI# - на
+        # стоке там банк tclinux и этого не бывает, значит роутер уже прошивали.
+        Warn 'в области ubi уже есть UBI и ядро его подключило - роутер прошивался раньше, это копия НЕ стока'
+        Dismount-Ubi
+    }
     Test-MtdLayout $info
     foreach ($l in $info -split "`n") {
         if ($l -match '^(mtd\d) (\S+) bad_blocks=(\d+)' -and [int]$Matches[3] -gt 0) {
@@ -1063,6 +1076,7 @@ try {
 
     if ($Mode -eq 'Restore') {
         Test-MtdLayout (Invoke-Ssh 'cat /proc/mtd').Out
+        Dismount-Ubi
         Say 'Запись области ubi из копии (mtd write)'
         $r = Invoke-Ssh 'mtd write - ubi 2>&1' 3600 -In (Join-Path $BackupDir 'mtd2-ubi.bin') -Echo -NoFail
         if ($r.ExitCode -ne 0) { Fail 'mtd write завершился с ошибкой' }
