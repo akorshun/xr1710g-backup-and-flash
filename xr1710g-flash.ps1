@@ -513,9 +513,11 @@ $script:Prompt = ''
 $ReKernel = 'Starting kernel|Linux version \d|Uncompressing Linux|Booting Linux'
 
 # Стоковый U-Boot: ждём его баннер, прерываем автозагрузку, учим приглашение.
-function Enter-StockUboot([string]$hint) {
+function Enter-StockUboot([string]$hint, [int]$from = -1) {
     Say $hint
-    $from = $script:C.Mark()
+    # $from - позиция в выводе, взятая до перезагрузки: баннер может прийти раньше,
+    # чем мы начнём его ждать
+    if ($from -lt 0) { $from = $script:C.Mark() }
     $deadline = (Get-Date).AddMinutes(10)
     $nag = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
@@ -849,8 +851,13 @@ function Install-Ubi([string]$dir, [string]$sysupgrade) {
 }
 
 function Restart-ToStock {
-    # соединение рвётся вместе с перезагрузкой, код возврата ssh здесь не важен
-    Invoke-Ssh 'sync; reboot' 15 -NoFail | Out-Null
+    # Перезагрузка через консоль, а не через ssh: ssh замечает обрыв соединения
+    # секунды спустя, а стоковый загрузчик ждёт нажатия меньше секунды. Возвращает
+    # позицию вывода до перезагрузки, с которой Enter-StockUboot ищет баннер.
+    Invoke-Ssh 'sync' 60 -NoFail | Out-Null
+    $m = $script:C.Mark()
+    $script:C.Send("`rsync; reboot`r")
+    return $m
 }
 
 # Запись слота chainloader командами стокового U-Boot и сверка чтением.
@@ -1063,8 +1070,8 @@ try {
         $got = (Invoke-Ssh 'sha256sum /dev/mtd2' 600).Out.Split(' ')[0].Trim()
         if ($got -ne $want) { Warn 'чтение ubi не совпало с копией побайтно (так бывает при новых плохих блоках)' }
         else { Info 'область ubi совпадает с копией' }
-        Restart-ToStock
-        Enter-StockUboot 'Перезагрузка в стоковый U-Boot'
+        $m = Restart-ToStock
+        Enter-StockUboot 'Перезагрузка в стоковый U-Boot' $m
         Write-Slot (Join-Path $BackupDir 'mtd1-chainloader.bin') 'стоковое начало tclinux'
         if ((Get-UbootVar 'bootcmd') -cne $script:RestoreBootcmd) {
             Set-UbootVar 'bootcmd' $script:RestoreBootcmd
@@ -1082,7 +1089,7 @@ try {
     Info 'сохраните эту папку отдельно - это единственный способ вернуть сток'
 
     if ($Mode -eq 'Backup') {
-        Restart-ToStock
+        Restart-ToStock | Out-Null
         Say 'Готово (только копия). Роутер перезагружается в стоковую прошивку, во флеш ничего не писалось.'
         Start-Sleep -Seconds 3
         return
@@ -1094,8 +1101,8 @@ try {
 Вендорский загрузчик (0x0-0x600000) и резерв BMT в конце флеша не трогаются.
 "@
     Install-Ubi $BackupDir $sysupgrade
-    Restart-ToStock
-    Enter-StockUboot 'Перезагрузка в стоковый U-Boot для записи загрузчика'
+    $m = Restart-ToStock
+    Enter-StockUboot 'Перезагрузка в стоковый U-Boot для записи загрузчика' $m
     if ($kind -eq 'http') {
         Write-Slot (Join-Path $FwDir $Files.HttpUboot) 'http-uboot (xr1710g-chainloader-slot.bin)'
     } else {

@@ -415,6 +415,9 @@ class Router:
             line = self.readline("root@OpenWrt:/# ", intr_ok=False)
             if line is None:
                 break
+            if line.strip() == "sync; reboot":
+                open(path("reboot"), "w").write("1")
+                break
             if "authorized_keys" in line and kind == "initramfs":
                 open(path("authorized"), "w").write(line)
             if 'XR_""RC=$?' in line:

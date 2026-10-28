@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import sys
+import time
 
 STATE = os.environ["XR_FAKE_STATE"]
 MTD = [("vendor", 0x600000), ("chainloader", 0x100000),
@@ -95,9 +96,8 @@ elif cmd == "mtd write - ubi 2>&1":
     if os.path.exists(path("installed")):
         os.remove(path("installed"))
     print("Unlocking ubi ...\nWriting from <stdin> to ubi ...")
-elif cmd == "sync; reboot":
-    open(path("reboot"), "w").write("1")
-    open(path("mode"), "w").write("rebooting")
-    fail("Connection to 192.168.1.1 closed by remote host.")
+elif cmd == "sync":
+    # a real ssh is slow to come back; the script must not rely on its timing
+    time.sleep(2)
 else:
     fail("fake_ssh: unexpected command: " + cmd, 127)
