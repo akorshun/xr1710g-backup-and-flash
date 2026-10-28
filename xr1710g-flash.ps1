@@ -1,46 +1,47 @@
 ﻿<#
 .SYNOPSIS
-    Gemtek / Brightspeed XR1710G: резервная копия стока и установка OpenWrt
-    (разметка UBI 2.0) с Windows через UART и Ethernet.
+    Gemtek / Brightspeed XR1710G: back up the stock firmware and install OpenWrt
+    (UBI 2.0 layout) from Windows over UART and Ethernet.
 
 .DESCRIPTION
-    Ведёт загрузчик роутера через USB-UART сам и раздаёт файлы своим TFTP-сервером.
-    Порядок (режим Install):
-      1. Стоковый U-Boot (AXON): прерывание автозагрузки, копия printenv,
-         в ОЗУ по TFTP грузится U-Boot OpenWrt, из него - initramfs OpenWrt.
-         Во флеш на этом этапе ничего не пишется, окружение не сохраняется.
-      2. initramfs в ОЗУ: снимаются все разделы флеша (vendor, chainloader, ubi,
-         reserved_bmt) на ПК по SSH со сверкой sha256; из vendor (DSD + EEPROM)
-         на ПК собирается том factory.
-      3. После подтверждения: ubiformat и тома UBI 2.0 (ubootenv, ubootenv2,
-         factory, recovery, fit + rootfs_data) с проверкой чтением.
-      4. Стоковый U-Boot: в слот chainloader (0x600000, 1 МиБ) пишется
-         выбранный загрузчик его же командой flash write со сверкой, при
-         необходимости меняется bootcmd, затем перезагрузка и проверка, что
-         OpenWrt поднялся.
+    Drives the router's boot loader over a USB-UART adapter and serves the files
+    from its own TFTP server. Install mode:
+      1. Stock U-Boot (AXON): stop autoboot, save printenv, TFTP the OpenWrt
+         U-Boot into RAM and boot the OpenWrt initramfs from it. Nothing is
+         written to flash and the environment is not saved at this stage.
+      2. initramfs in RAM: every flash partition (vendor, chainloader, ubi,
+         reserved_bmt) is copied to the PC over SSH and checked with sha256;
+         the factory volume is built on the PC from vendor (DSD + EEPROM).
+      3. After confirmation: ubiformat and the UBI 2.0 volumes (ubootenv,
+         ubootenv2, factory, recovery, fit + rootfs_data), read back.
+      4. Stock U-Boot: the chosen loader goes into the chainloader slot
+         (0x600000, 1 MiB) with its own flash write and is read back, bootcmd
+         is changed if needed, then the router reboots into OpenWrt.
 
-    Режим Backup выполняет шаги 1-2 и перезагружает роутер в сток.
-    Режим Restore возвращает сток из такой копии.
-    Режим Loader выполняет только шаг 4: дописать слот и bootcmd, если Install
-    прервался после разметки UBI, или сменить загрузчик на уже прошитом роутере.
+    Backup mode runs steps 1-2 and reboots the router into the stock firmware.
+    Restore mode writes the stock firmware back from such a backup.
+    Loader mode runs step 4 only: finish an Install that stopped after the UBI
+    layout was written, or switch the loader on an installed router.
 
 .PARAMETER Mode
-    Install (по умолчанию), Backup, Restore или Loader.
+    Install (default), Backup, Restore or Loader.
 .PARAMETER Loader
-    http - U-Boot с HTTP-рекавери YYH2913; openwrt - чейнлоадер U-Boot OpenWrt.
-    Без параметра скрипт спросит.
+    http - YYH2913's U-Boot with HTTP recovery; openwrt - OpenWrt chainloaded U-Boot.
+    Asked interactively when not given.
+.PARAMETER Lang
+    en or ru: language of the messages. Asked interactively when not given.
 .PARAMETER ComPort
-    COM-порт USB-UART (COM3 и т.п.). Без параметра - выбор из списка.
+    COM port of the USB-UART adapter (COM3 etc.). Picked from a list when not given.
 .PARAMETER Firmware
-    Свой sysupgrade.itb вместо firmware\...-squashfs-sysupgrade.itb.
-    Должен быть собран под gemtek,xr1710g-ubi с разметкой UBI 2.0.
+    Your own sysupgrade.itb instead of firmware\...-squashfs-sysupgrade.itb.
+    Must be built for gemtek,xr1710g-ubi with the UBI 2.0 layout.
 .PARAMETER BackupDir
-    Install/Backup: куда класть копию (по умолчанию backup\<дата-время>).
-    Restore: папка с ранее снятой копией.
+    Install/Backup: where to put the backup (default backup\<date-time>).
+    Restore: folder with an earlier backup.
 .EXAMPLE
     .\xr1710g-flash.ps1 -ComPort COM5 -Loader http
 .EXAMPLE
-    .\xr1710g-flash.ps1 -Mode Backup
+    .\xr1710g-flash.ps1 -Mode Backup -Lang ru
 .EXAMPLE
     .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
 .EXAMPLE
@@ -52,6 +53,8 @@ param(
     [string]$Mode = 'Install',
     [ValidateSet('', 'http', 'openwrt')]
     [string]$Loader = '',
+    [ValidateSet('', 'en', 'ru')]
+    [string]$Lang = '',
     [string]$ComPort = '',
     [string]$Firmware = '',
     [string]$BackupDir = '',
@@ -60,7 +63,7 @@ param(
     [string]$RouterIp = '192.168.1.1',
     [switch]$SkipNetworkSetup,
     [switch]$Yes,
-    # для тестов без железа (tests\run-fake.ps1)
+    # for tests without hardware (tests\run-fake.ps1)
     [string]$SerialTcp = '',
     [string]$SshExe = '',
     [string]$SshPrefix = '',
@@ -81,7 +84,7 @@ $Files = @{
     Sysupgrade   = 'openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb'
 }
 
-# Разделы, которые OpenWrt видит на XR1710G с разметкой UBI 2.0
+# Partitions OpenWrt sees on the XR1710G with the UBI 2.0 layout
 $Layout = @(
     @{ Mtd = 'mtd0'; Name = 'vendor';       Size = 0x00600000 },
     @{ Mtd = 'mtd1'; Name = 'chainloader';  Size = 0x00100000 },
@@ -89,7 +92,7 @@ $Layout = @(
     @{ Mtd = 'mtd3'; Name = 'reserved_bmt'; Size = 0x04200000 }
 )
 
-# bootcmd стокового загрузчика и значения, с которыми работает каждый чейнлоадер
+# Stock loader bootcmd and the values each chainloader works with
 $StockBootcmd = 'flash read 0x602100 0x4000000 $loadaddr; bootm'
 $OpenWrtBootcmd = 'flash read 0x600000 0x100000 $loadaddr; bootm'
 $HttpBootcmds = @($StockBootcmd, $OpenWrtBootcmd,
@@ -97,8 +100,8 @@ $HttpBootcmds = @($StockBootcmd, $OpenWrtBootcmd,
     'flash read 0x600000 0x100000 $loadaddr; bootm 0x81802100')
 
 # ---------------------------------------------------------------------------
-# Вспомогательные классы: консоль (COM или TCP для тестов), TFTP-сервер,
-# запуск ssh с двоичным вводом/выводом.
+# Helper classes: console (COM, or TCP for tests), TFTP server,
+# ssh runner with binary stdin/stdout.
 # ---------------------------------------------------------------------------
 if (-not ('XrConsole' -as [type])) {
     Add-Type -ReferencedAssemblies System -TypeDefinition @'
@@ -172,7 +175,7 @@ public class XrConsole : IDisposable {
         byte[] b = L1.GetBytes(s);
         lock (stream) { stream.Write(b, 0, b.Length); stream.Flush(); }
     }
-    // Ждёт pattern в выводе начиная с from; возвращает позицию за совпадением или -1.
+    // Waits for pattern in the output from `from` on; returns the position after the match or -1.
     public Match LastMatch;
     public int WaitFor(string pattern, int from, int timeoutMs) {
         Regex re = new Regex(pattern, RegexOptions.Multiline);
@@ -184,7 +187,7 @@ public class XrConsole : IDisposable {
         } while (DateTime.UtcNow < end);
         return -1;
     }
-    // Шлёт s каждые intervalMs, пока не появится pattern или не выйдет время.
+    // Sends s every intervalMs until pattern shows up or the time runs out.
     public int SpamUntil(string s, int intervalMs, string pattern, int from, int timeoutMs) {
         Regex re = pattern == null ? null : new Regex(pattern, RegexOptions.Multiline);
         DateTime end = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -207,9 +210,9 @@ public class XrConsole : IDisposable {
     }
 }
 
-// Минимальный TFTP-сервер (RFC 1350 + опции blksize/tsize/timeout), только чтение,
-// одна передача за раз, всё через один сокет: U-Boot берёт порт сервера из первого
-// ответа, поэтому отдельный порт на передачу не нужен, а в брандмауэре хватает UDP 69.
+// Minimal TFTP server (RFC 1350 + blksize/tsize/timeout options), read only,
+// one transfer at a time, all on one socket: U-Boot takes the server port from the
+// first reply, so no per-transfer port is needed and UDP 69 is enough in the firewall.
 public class XrTftp : IDisposable {
     UdpClient udp; Thread th; volatile bool stop;
     readonly Dictionary<string, string> files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -242,7 +245,7 @@ public class XrTftp : IDisposable {
         while (!stop) {
             IPEndPoint from;
             byte[] p = Receive(out from);
-            if (p == null || p.Length < 4 || p[1] != 1) continue;  // только RRQ
+            if (p == null || p.Length < 4 || p[1] != 1) continue;  // RRQ only
             try { Serve(p, from); }
             catch (Exception e) { Status = "error: " + e.Message; }
         }
@@ -278,7 +281,7 @@ public class XrTftp : IDisposable {
             foreach (string o in oack) { byte[] b = Encoding.ASCII.GetBytes(o); ms.Write(b, 0, b.Length); ms.WriteByte(0); }
             if (!Exchange(ms.ToArray(), 0, client, tmo)) { Status = "no ack for oack: " + name; return; }
         }
-        int nblocks = data.Length / blk + 1;   // последний блок короче blk (может быть пустым)
+        int nblocks = data.Length / blk + 1;   // the last block is shorter than blk (may be empty)
         for (int i = 1; i <= nblocks; i++) {
             int off = (i - 1) * blk, len = Math.Min(blk, data.Length - off);
             byte[] pkt = new byte[4 + len];
@@ -289,7 +292,7 @@ public class XrTftp : IDisposable {
         Served++;
         Status = "sent " + name + " " + data.Length;
     }
-    // Отправить пакет и дождаться ACK с номером block; новый RRQ от клиента - начать заново.
+    // Send a packet and wait for the ACK of block; a new RRQ from the client restarts.
     bool Exchange(byte[] pkt, int block, IPEndPoint client, int tmo) {
         for (int tries = 0; tries < 8 && !stop; tries++) {
             Send(pkt, client);
@@ -318,7 +321,7 @@ public class XrProc {
         int n;
         while ((n = from.Read(b, 0, b.Length)) > 0) to.Write(b, 0, n);
     }
-    // stdinPath/stdoutPath: двоичные файлы или пустая строка (из PowerShell $null приходит как ""); echo - печатать stdout построчно.
+    // stdinPath/stdoutPath: binary files or an empty string (PowerShell passes $null as ""); echo prints stdout line by line.
     public static XrProc Run(string exe, string args, string stdinPath, string stdoutPath, bool echo, int timeoutMs) {
         ProcessStartInfo si = new ProcessStartInfo(exe, args);
         si.UseShellExecute = false;
@@ -327,8 +330,8 @@ public class XrProc {
         si.RedirectStandardOutput = true;
         si.RedirectStandardError = true;
         XrProc r = new XrProc();
-        // StandardInput в .NET Framework - StreamWriter с Console.InputEncoding; при
-        // UTF-8 консоли он первым делом пишет BOM, и файл приходит на 3 байта длиннее.
+        // .NET Framework StandardInput is a StreamWriter with Console.InputEncoding; on a
+        // UTF-8 console it writes a BOM first and the file arrives 3 bytes longer.
         try {
             if (Console.InputEncoding.GetPreamble().Length > 0) Console.InputEncoding = new UTF8Encoding(false);
         } catch (Exception) { }
@@ -371,7 +374,7 @@ public class XrProc {
 }
 
 # ---------------------------------------------------------------------------
-# Вывод
+# Output
 # ---------------------------------------------------------------------------
 $script:LogFile = $null
 function Write-Log([string]$text) {
@@ -385,12 +388,14 @@ function Say([string]$text) {
 function Info([string]$text) { Write-Host "    $text"; Write-Log "    $text" }
 function Warn([string]$text) { Write-Host "[!] $text" -ForegroundColor Yellow; Write-Log "[!] $text" }
 function Fail([string]$text) { throw $text }
+# Message in the chosen language: T 'English' 'Русский'
+function T([string]$en, [string]$ru) { if ($script:Lang -eq 'ru') { return $ru } return $en }
 
 function Confirm-Step([string]$question) {
     if ($Yes) { return }
     Write-Host ''
-    $a = Read-Host "$question Введите YES, чтобы продолжить"
-    if ($a -cne 'YES') { Fail 'Остановлено пользователем.' }
+    $a = Read-Host "$question $(T 'Type YES to continue' 'Введите YES, чтобы продолжить')"
+    if ($a -cne 'YES') { Fail (T 'Stopped by the user.' 'Остановлено пользователем.') }
 }
 
 function Format-Hex([long]$v) { '0x{0:x}' -f $v }
@@ -400,43 +405,43 @@ function Get-Sha256([string]$path) { (Get-FileHash -Algorithm SHA256 -LiteralPat
 function Scale([int]$seconds) { [int]($seconds * 1000 / $TimeScale) }
 
 # ---------------------------------------------------------------------------
-# Проверка файлов
+# File checks
 # ---------------------------------------------------------------------------
 function Test-Bundle {
     $sums = Join-Path $FwDir 'SHA256SUMS'
-    if (-not (Test-Path $sums)) { Fail "нет $sums" }
+    if (-not (Test-Path $sums)) { Fail (T "missing $sums" "нет $sums") }
     $want = @{}
     foreach ($l in Get-Content -LiteralPath $sums) {
         if ($l -match '^([0-9a-f]{64})\s+\*?(.+)$') { $want[$Matches[2].Trim()] = $Matches[1] }
     }
     foreach ($f in $Files.Values) {
         $p = Join-Path $FwDir $f
-        if (-not (Test-Path $p)) { Fail "нет файла firmware\$f" }
-        if ($want[$f] -ne (Get-Sha256 $p)) { Fail "sha256 не совпадает: firmware\$f (файл повреждён или изменён)" }
+        if (-not (Test-Path $p)) { Fail (T "missing file firmware\$f" "нет файла firmware\$f") }
+        if ($want[$f] -ne (Get-Sha256 $p)) { Fail (T "sha256 mismatch: firmware\$f (file damaged or changed)" "sha256 не совпадает: firmware\$f (файл повреждён или изменён)") }
     }
-    Info 'все файлы в firmware\ на месте, sha256 совпадают'
+    Info (T 'all files in firmware\ present, sha256 match' 'все файлы в firmware\ на месте, sha256 совпадают')
 }
 
-# Образ sysupgrade должен быть под XR1710G и с разметкой UBI 2.0: в DTB внутри
-# FIT раздел ubi = <0x00700000 0x1b700000>.
+# The sysupgrade image must be for the XR1710G with the UBI 2.0 layout: the DTB in
+# the FIT has the ubi partition at <0x00700000 0x1b700000>.
 function Test-Sysupgrade([string]$path) {
     $bytes = [IO.File]::ReadAllBytes($path)
     $s = [Text.Encoding]::GetEncoding(28591).GetString($bytes)
-    if ($s.IndexOf('gemtek,xr1710g-ubi') -lt 0) { Fail "$path собран не под gemtek,xr1710g-ubi" }
+    if ($s.IndexOf('gemtek,xr1710g-ubi') -lt 0) { Fail (T "$path is not built for gemtek,xr1710g-ubi" "$path собран не под gemtek,xr1710g-ubi") }
     $l1 = [Text.Encoding]::GetEncoding(28591)
     $ubi20 = $l1.GetString([byte[]](0, 0x70, 0, 0, 0x1b, 0x70, 0, 0))
     $ubi15 = $l1.GetString([byte[]](0, 0x70, 0, 0, 0x1d, 0x9c, 0, 0))
     $ubi10 = $l1.GetString([byte[]](0, 0x70, 0, 0, 0x1f, 0x70, 0, 0))
-    if ($s.IndexOf($ubi15) -ge 0) { Fail "$path - разметка UBI 1.5, нужен образ с UBI 2.0" }
-    if ($s.IndexOf($ubi10) -ge 0) { Fail "$path - разметка UBI 1.0, нужен образ с UBI 2.0" }
-    if ($s.IndexOf($ubi20) -lt 0) { Fail "$path - в DTB не найден раздел ubi 0x700000+0x1b700000 (UBI 2.0)" }
+    if ($s.IndexOf($ubi15) -ge 0) { Fail (T "$path has the UBI 1.5 layout, a UBI 2.0 image is needed" "$path - разметка UBI 1.5, нужен образ с UBI 2.0") }
+    if ($s.IndexOf($ubi10) -ge 0) { Fail (T "$path has the UBI 1.0 layout, a UBI 2.0 image is needed" "$path - разметка UBI 1.0, нужен образ с UBI 2.0") }
+    if ($s.IndexOf($ubi20) -lt 0) { Fail (T "$path - no ubi partition 0x700000+0x1b700000 (UBI 2.0) in the DTB" "$path - в DTB не найден раздел ubi 0x700000+0x1b700000 (UBI 2.0)") }
     if ($bytes[0] -ne 0xd0 -or $bytes[1] -ne 0x0d -or $bytes[2] -ne 0xfe -or $bytes[3] -ne 0xed) {
-        Fail "$path - это не FIT (*-squashfs-sysupgrade.itb)"
+        Fail (T "$path is not a FIT (*-squashfs-sysupgrade.itb)" "$path - это не FIT (*-squashfs-sysupgrade.itb)")
     }
 }
 
 # ---------------------------------------------------------------------------
-# Сеть ПК: адрес PcIp на проводном адаптере и правило брандмауэра для TFTP
+# PC network: PcIp on the wired adapter and a firewall rule for TFTP
 # ---------------------------------------------------------------------------
 $script:NetUndo = $null
 $script:FwRule = $null
@@ -450,44 +455,44 @@ function Invoke-Netsh([string]$netshArgs, [switch]$NoFail) {
 function Initialize-Network {
     $have = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $PcIp }
     if ($have) {
-        Info "адрес $PcIp уже есть на адаптере '$($have[0].InterfaceAlias)'"
+        Info (T "$PcIp is already set on adapter '$($have[0].InterfaceAlias)'" "адрес $PcIp уже есть на адаптере '$($have[0].InterfaceAlias)'")
     } else {
         $nics = @(Get-NetAdapter -Physical | Where-Object { $_.MediaType -eq '802.3' } | Sort-Object Name)
-        if ($nics.Count -eq 0) { Fail 'не найдено проводных сетевых адаптеров' }
-        Info 'Проводные адаптеры:'
+        if ($nics.Count -eq 0) { Fail (T 'no wired network adapters found' 'не найдено проводных сетевых адаптеров') }
+        Info (T 'Wired adapters:' 'Проводные адаптеры:')
         for ($i = 0; $i -lt $nics.Count; $i++) {
             Info ("  [{0}] {1} - {2} ({3})" -f ($i + 1), $nics[$i].Name, $nics[$i].InterfaceDescription, $nics[$i].Status)
         }
         $n = 1
         if ($nics.Count -gt 1) {
-            $n = [int](Read-Host 'Номер адаптера, подключённого к роутеру')
-            if ($n -lt 1 -or $n -gt $nics.Count) { Fail 'неверный номер' }
+            $n = [int](Read-Host (T 'Number of the adapter connected to the router' 'Номер адаптера, подключённого к роутеру'))
+            if ($n -lt 1 -or $n -gt $nics.Count) { Fail (T 'wrong number' 'неверный номер') }
         }
         $nic = $nics[$n - 1]
         Write-Host ''
-        Write-Host "На адаптере '$($nic.Name)' будет временно задан адрес $PcIp/24" -ForegroundColor Yellow
-        Write-Host '(DHCP на нём отключается до конца работы скрипта, потом всё возвращается).' -ForegroundColor Yellow
+        Write-Host (T "Adapter '$($nic.Name)' will temporarily get the address $PcIp/24" "На адаптере '$($nic.Name)' будет временно задан адрес $PcIp/24") -ForegroundColor Yellow
+        Write-Host (T '(DHCP on it is off until the script ends, then everything is put back).' '(DHCP на нём отключается до конца работы скрипта, потом всё возвращается).') -ForegroundColor Yellow
         if (-not $Yes) {
-            $a = Read-Host 'Продолжить? [Y/n]'
-            if ($a -match '^[nNнН]') { Fail "задайте адрес $PcIp/24 вручную и запустите снова" }
+            $a = Read-Host (T 'Continue? [Y/n]' 'Продолжить? [Y/n]')
+            if ($a -match '^[nNнН]') { Fail (T "set $PcIp/24 by hand and run again" "задайте адрес $PcIp/24 вручную и запустите снова") }
         }
         $ipif = Get-NetIPInterface -InterfaceIndex $nic.ifIndex -AddressFamily IPv4
         $script:NetUndo = @{ Index = $nic.ifIndex; Dhcp = [string]$ipif.Dhcp }
-        # netsh, а не New-NetIPAddress: тот отказывает ("Inconsistent parameters PolicyStore
-        # PersistentStore and Dhcp Enabled"), если DHCP выключен только в одном из хранилищ.
+        # netsh, not New-NetIPAddress: that one refuses ("Inconsistent parameters PolicyStore
+        # PersistentStore and Dhcp Enabled") when DHCP is off in only one of the stores.
         if ($ipif.Dhcp -eq 'Enabled') {
             Invoke-Netsh "interface ipv4 set address name=$($nic.ifIndex) source=static address=$PcIp mask=255.255.255.0"
         } else {
             Invoke-Netsh "interface ipv4 add address name=$($nic.ifIndex) address=$PcIp mask=255.255.255.0"
         }
-        Info "адрес $PcIp/24 задан на '$($nic.Name)'"
+        Info (T "$PcIp/24 set on '$($nic.Name)'" "адрес $PcIp/24 задан на '$($nic.Name)'")
     }
     $name = 'XR1710G flash TFTP (temporary)'
     Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     New-NetFirewallRule -DisplayName $name -Direction Inbound -Action Allow -Protocol UDP `
         -LocalPort $TftpPort -RemoteAddress '192.168.1.0/24' -Profile Any | Out-Null
     $script:FwRule = $name
-    Info "временное правило брандмауэра для TFTP (UDP $TftpPort) добавлено"
+    Info (T "temporary firewall rule for TFTP (UDP $TftpPort) added" "временное правило брандмауэра для TFTP (UDP $TftpPort) добавлено")
 }
 
 function Restore-Network {
@@ -503,7 +508,7 @@ function Restore-Network {
         } else {
             Invoke-Netsh "interface ipv4 delete address name=$($u.Index) address=$PcIp" -NoFail
         }
-        Info 'настройки сетевого адаптера возвращены'
+        Info (T 'network adapter settings restored' 'настройки сетевого адаптера возвращены')
     }
 }
 
@@ -513,15 +518,15 @@ function Restore-Network {
 function Select-ComPort {
     if ($ComPort) { return $ComPort }
     $ports = @([IO.Ports.SerialPort]::GetPortNames() | Sort-Object -Unique)
-    if ($ports.Count -eq 0) { Fail 'COM-порты не найдены: подключите USB-UART и установите его драйвер' }
+    if ($ports.Count -eq 0) { Fail (T 'no COM ports: plug in the USB-UART adapter and install its driver' 'COM-порты не найдены: подключите USB-UART и установите его драйвер') }
     $names = @{}
     Get-CimInstance Win32_PnPEntity -Filter "Name LIKE '%(COM%'" -ErrorAction SilentlyContinue |
         ForEach-Object { if ($_.Name -match '\((COM\d+)\)') { $names[$Matches[1]] = $_.Name } }
-    if ($ports.Count -eq 1) { Info "COM-порт: $($ports[0]) $($names[$ports[0]])"; return $ports[0] }
-    Info 'COM-порты:'
+    if ($ports.Count -eq 1) { Info (T "COM port: $($ports[0]) $($names[$ports[0]])" "COM-порт: $($ports[0]) $($names[$ports[0]])"); return $ports[0] }
+    Info (T 'COM ports:' 'COM-порты:')
     for ($i = 0; $i -lt $ports.Count; $i++) { Info ("  [{0}] {1}" -f ($i + 1), $names[$ports[$i]]) }
-    $n = [int](Read-Host 'Номер порта USB-UART')
-    if ($n -lt 1 -or $n -gt $ports.Count) { Fail 'неверный номер' }
+    $n = [int](Read-Host (T 'Number of the USB-UART port' 'Номер порта USB-UART'))
+    if ($n -lt 1 -or $n -gt $ports.Count) { Fail (T 'wrong number' 'неверный номер') }
     return $ports[$n - 1]
 }
 
@@ -530,21 +535,21 @@ $script:Prompt = ''
 
 $ReKernel = 'Starting kernel|Linux version \d|Uncompressing Linux|Booting Linux'
 
-# Стоковый U-Boot: ждём его баннер, прерываем автозагрузку, учим приглашение.
+# Stock U-Boot: wait for its banner, stop autoboot, learn the prompt.
 function Enter-StockUboot([string]$hint, [int]$from = -1) {
     Say $hint
-    # $from - позиция в выводе, взятая до перезагрузки: баннер может прийти раньше,
-    # чем мы начнём его ждать
+    # $from is the output position taken before a reboot: the banner may arrive
+    # before we start waiting for it
     if ($from -lt 0) { $from = $script:C.Mark() }
     $deadline = (Get-Date).AddMinutes(10)
     $nag = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
         $pos = $script:C.WaitFor('U-Boot 2014|AXON|[Hh]it any key|autoboot', $from, 1000)
         if ($pos -lt 0) {
-            if ((Get-Date) -gt $nag) { Warn 'с UART ничего не приходит: включите (или передёрните) питание роутера, проверьте TX/RX/GND'; $nag = (Get-Date).AddSeconds(30) }
+            if ((Get-Date) -gt $nag) { Warn (T 'nothing on the UART: power the router on (or cycle power), check TX/RX/GND' 'с UART ничего не приходит: включите (или передёрните) питание роутера, проверьте TX/RX/GND'); $nag = (Get-Date).AddSeconds(30) }
             continue
         }
-        # Ctrl-C прерывает автозагрузку; затем проверяем, что мы в командной строке
+        # Ctrl-C stops autoboot; then check that we are at the command line
         $script:C.SpamUntil([string][char]3, 40, $null, $pos, (Scale 3)) | Out-Null
         Start-Sleep -Milliseconds 300
         for ($i = 0; $i -lt 3; $i++) {
@@ -552,15 +557,15 @@ function Enter-StockUboot([string]$hint, [int]$from = -1) {
             $script:C.Send("echo XR_`"`"OK`r")
             if ($script:C.WaitFor('XR_OK', $m, 1500) -ge 0) {
                 Learn-Prompt
-                Info "стоковый U-Boot остановлен, приглашение '$($script:Prompt)'"
+                Info (T "stock U-Boot stopped, prompt '$($script:Prompt)'" "стоковый U-Boot остановлен, приглашение '$($script:Prompt)'")
                 return
             }
             if ($script:C.WaitFor($ReKernel, $pos, 10) -ge 0) { break }
         }
-        Warn 'не удалось остановить загрузку - выключите и включите питание роутера ещё раз'
+        Warn (T 'could not stop the boot - power the router off and on again' 'не удалось остановить загрузку - выключите и включите питание роутера ещё раз')
         $from = $script:C.Mark()
     }
-    Fail 'стоковый U-Boot так и не появился в консоли'
+    Fail (T 'the stock U-Boot never showed up on the console' 'стоковый U-Boot так и не появился в консоли')
 }
 
 function Learn-Prompt {
@@ -573,14 +578,14 @@ function Learn-Prompt {
         $p = $t[-1].Trim()
         if ($p) { $script:Prompt = $p; return }
     }
-    Fail 'не удалось определить приглашение U-Boot'
+    Fail (T 'could not learn the U-Boot prompt' 'не удалось определить приглашение U-Boot')
 }
 
-# Команда U-Boot: отправить и дождаться приглашения; вернуть вывод.
+# U-Boot command: send it, wait for the prompt, return the output.
 function Invoke-Uboot([string]$cmd, [int]$timeout = 20, [switch]$NoFail) {
     $m = $script:C.Mark()
     $script:C.Send("$cmd`r")
-    # стоковый 'flash write' печатает точки и приглашение без перевода строки
+    # the stock 'flash write' prints dots and then the prompt with no newline
     $re = '(?:\n|\.)' + [regex]::Escape($script:Prompt) + '[ \t]*\z'
     $end = $script:C.WaitFor($re, $m + $cmd.Length, (Scale $timeout))
     $out = $script:C.Since($m)
@@ -588,7 +593,7 @@ function Invoke-Uboot([string]$cmd, [int]$timeout = 20, [switch]$NoFail) {
     if ($end -lt 0) {
         $script:C.SpamUntil([string][char]3, 200, $re, $script:C.Mark(), 5000) | Out-Null
         if ($NoFail) { return $out }
-        Fail "U-Boot не ответил на '$cmd' за $timeout с"
+        Fail (T "U-Boot did not answer '$cmd' within $timeout s" "U-Boot не ответил на '$cmd' за $timeout с")
     }
     return $out
 }
@@ -601,8 +606,8 @@ function Get-UbootVar([string]$name) {
     return $null
 }
 
-# setenv с произвольным значением ($ и ; внутри): кавычки и \$, как в инструкции
-# OpenWrt для W1700K; если стоковый hush поймёт иначе - вариант с one/two оттуда же.
+# setenv with any value ($ and ; inside): quotes and \$, as in the OpenWrt W1700K
+# instructions; if the stock hush reads it differently - the one/two variant from there.
 function Set-UbootVar([string]$name, [string]$value) {
     $esc = $value.Replace('\', '\\').Replace('"', '\"').Replace('$', '\$')
     Invoke-Uboot "setenv $name `"$esc`"" | Out-Null
@@ -616,7 +621,7 @@ function Set-UbootVar([string]$name, [string]$value) {
         Invoke-Uboot 'setenv two' | Out-Null
         if ((Get-UbootVar $name) -ceq $value) { return }
     }
-    Fail "не удалось записать $name='$value' (сейчас: '$(Get-UbootVar $name)')"
+    Fail (T "could not set $name='$value' (now: '$(Get-UbootVar $name)')" "не удалось записать $name='$value' (сейчас: '$(Get-UbootVar $name)')")
 }
 
 $script:Tftp = $null
@@ -628,27 +633,27 @@ function Invoke-TftpLoad([string]$path, [string]$addr, [int]$tries = 6) {
     for ($i = 1; $i -le $tries; $i++) {
         $o = Invoke-Uboot "tftpboot $addr $name" 180 -NoFail
         if ($o -match 'Bytes transferred = (\d+)' -and [int64]$Matches[1] -eq $size) {
-            Info "$name загружен по TFTP ($size байт)"
+            Info (T "$name loaded over TFTP ($size bytes)" "$name загружен по TFTP ($size байт)")
             return $size
         }
-        Warn "TFTP: попытка $i из $tries не удалась ($($script:Tftp.Status))"
-        if ($i -eq 2) { Warn 'Сетевой драйвер стокового U-Boot капризный, это нормально. Если так и не пойдёт - переткните кабель в другой LAN-порт.' }
+        Warn (T "TFTP: attempt $i of $tries failed ($($script:Tftp.Status))" "TFTP: попытка $i из $tries не удалась ($($script:Tftp.Status))")
+        if ($i -eq 2) { Warn (T 'The stock U-Boot network driver is flaky, this is normal. If it never works, move the cable to another LAN port.' 'Сетевой драйвер стокового U-Boot капризный, это нормально. Если так и не пойдёт - переткните кабель в другой LAN-порт.') }
         Start-Sleep -Seconds 2
     }
-    Fail "не удалось загрузить $name по TFTP. Проверьте кабель, адрес $PcIp и брандмауэр"
+    Fail (T "could not load $name over TFTP. Check the cable, the address $PcIp and the firewall" "не удалось загрузить $name по TFTP. Проверьте кабель, адрес $PcIp и брандмауэр")
 }
 
-# Переход из стокового U-Boot в U-Boot OpenWrt и initramfs, всё в ОЗУ.
+# From the stock U-Boot to the OpenWrt U-Boot and initramfs, all in RAM.
 function Enter-RamLinux {
-    Say 'Загрузка U-Boot OpenWrt в ОЗУ (флеш не трогается)'
+    Say (T 'Loading the OpenWrt U-Boot into RAM (flash untouched)' 'Загрузка U-Boot OpenWrt в ОЗУ (флеш не трогается)')
     Invoke-Uboot "setenv ipaddr $UbootIp" | Out-Null
     Invoke-Uboot "setenv serverip $PcIp" | Out-Null
     Invoke-TftpLoad (Join-Path $FwDir $Files.OpenWrtUboot) '0x89000000' | Out-Null
     $m = $script:C.Mark()
     $script:C.Send("bootm 0x89000000`r")
     $pos = $script:C.WaitFor('U-Boot 20(1[5-9]|[2-9]\d)', $m, (Scale 60))
-    if ($pos -lt 0) { Fail 'U-Boot OpenWrt не стартовал из ОЗУ (bootm)' }
-    # меню загрузки: Ctrl-C выбирает Exit и даёт командную строку
+    if ($pos -lt 0) { Fail (T 'the OpenWrt U-Boot did not start from RAM (bootm)' 'U-Boot OpenWrt не стартовал из ОЗУ (bootm)') }
+    # boot menu: Ctrl-C picks Exit and gives the command line
     $script:C.SpamUntil([string][char]3, 100, '\nU-Boot> ?\z', $pos, (Scale 15)) | Out-Null
     Start-Sleep -Milliseconds 500
     $ok = $false
@@ -658,39 +663,39 @@ function Enter-RamLinux {
         $ok = $script:C.WaitFor('XR_OK', $m, 2000) -ge 0
         if (-not $ok) { $script:C.Send([string][char]3) }
     }
-    if (-not $ok) { Fail 'не удалось попасть в командную строку U-Boot OpenWrt' }
+    if (-not $ok) { Fail (T 'could not reach the OpenWrt U-Boot command line' 'не удалось попасть в командную строку U-Boot OpenWrt') }
     Learn-Prompt
-    Info "U-Boot OpenWrt в ОЗУ, приглашение '$($script:Prompt)'"
+    Info (T "OpenWrt U-Boot in RAM, prompt '$($script:Prompt)'" "U-Boot OpenWrt в ОЗУ, приглашение '$($script:Prompt)'")
 
-    Say 'Загрузка initramfs OpenWrt в ОЗУ'
+    Say (T 'Loading the OpenWrt initramfs into RAM' 'Загрузка initramfs OpenWrt в ОЗУ')
     Invoke-Uboot "setenv ipaddr $UbootIp" | Out-Null
     Invoke-Uboot "setenv serverip $PcIp" | Out-Null
     Invoke-TftpLoad (Join-Path $FwDir $Files.Backup) '$initaddr' | Out-Null
     $m = $script:C.Mark()
     $script:C.Send("bootm `$initaddr#`$bootconf`r")
     if ($script:C.WaitFor('Please press Enter to activate this console', $m, (Scale 240)) -lt 0) {
-        Fail 'initramfs не загрузился за 4 минуты'
+        Fail (T 'the initramfs did not boot within 4 minutes' 'initramfs не загрузился за 4 минуты')
     }
     Start-Sleep -Seconds 2
     $m = $script:C.Mark()
     $script:C.Send("`r")
-    if ($script:C.WaitFor('root@[^\r\n]*# ?$', $m, 10000) -lt 0) { Fail 'нет приглашения shell в initramfs' }
-    Info 'initramfs OpenWrt работает'
+    if ($script:C.WaitFor('root@[^\r\n]*# ?$', $m, 10000) -lt 0) { Fail (T 'no shell prompt in the initramfs' 'нет приглашения shell в initramfs') }
+    Info (T 'OpenWrt initramfs is running' 'initramfs OpenWrt работает')
 
-    # Ключ для SSH кладём через консоль: пустой пароль root в разных сборках dropbear
-    # ведёт себя по-разному, а ключ работает всегда.
+    # The SSH key goes in over the console: an empty root password behaves differently
+    # across dropbear builds, a key always works.
     $pub = (Get-Content -LiteralPath "$($script:Key).pub" -Raw).Trim()
     Invoke-Shell "mkdir -p /etc/dropbear && echo '$pub' > /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys"
     Wait-Ssh
 }
 
-# Команда в shell роутера через UART (код возврата через маркер).
+# Command in the router shell over UART (exit code via a marker).
 function Invoke-Shell([string]$cmd, [int]$timeout = 30) {
     $m = $script:C.Mark()
     $script:C.Send("$cmd; echo XR_`"`"RC=`$?`r")
-    if ($script:C.WaitFor('XR_RC=(\d+)', $m, (Scale $timeout)) -lt 0) { Fail "нет ответа shell на: $cmd" }
+    if ($script:C.WaitFor('XR_RC=(\d+)', $m, (Scale $timeout)) -lt 0) { Fail (T "no shell answer to: $cmd" "нет ответа shell на: $cmd") }
     $rc = $script:C.LastMatch.Groups[1].Value
-    if ($rc -ne '0') { Fail "команда завершилась с кодом $rc : $cmd" }
+    if ($rc -ne '0') { Fail (T "command exited with code $rc : $cmd" "команда завершилась с кодом $rc : $cmd") }
 }
 
 # ---------------------------------------------------------------------------
@@ -716,7 +721,7 @@ function Initialize-Ssh([string]$dir) {
     if ($SshExe) { $script:Ssh = $SshExe }
     else {
         $c = Get-Command ssh.exe -ErrorAction SilentlyContinue
-        if (-not $c) { Fail 'нет ssh.exe: Параметры -> Система -> Дополнительные компоненты -> Клиент OpenSSH' }
+        if (-not $c) { Fail (T 'no ssh.exe: Settings -> System -> Optional features -> OpenSSH Client' 'нет ssh.exe: Параметры -> Система -> Дополнительные компоненты -> Клиент OpenSSH') }
         $script:Ssh = $c.Source
     }
     $script:Key = Join-Path $dir 'id_ed25519'
@@ -740,69 +745,69 @@ function Get-SshArgs([string]$cmd) {
 function Invoke-Ssh([string]$cmd, [int]$timeout = 60, [string]$In = $null, [string]$OutFile = $null, [switch]$Echo, [switch]$NoFail) {
     $r = [XrProc]::Run($script:Ssh, (Get-SshArgs $cmd), $In, $OutFile, [bool]$Echo, $timeout * 1000)
     Write-Log "ssh> $cmd (rc=$($r.ExitCode))`n$($r.Out)$($r.Err)"
-    if ($r.ExitCode -ne 0 -and -not $NoFail) { Fail "ssh '$cmd' завершился с кодом $($r.ExitCode): $($r.Err.Trim())" }
+    if ($r.ExitCode -ne 0 -and -not $NoFail) { Fail (T "ssh '$cmd' exited with code $($r.ExitCode): $($r.Err.Trim())" "ssh '$cmd' завершился с кодом $($r.ExitCode): $($r.Err.Trim())") }
     return $r
 }
 
 function Wait-Ssh {
-    # старая запись ARP для этого адреса (от U-Boot) мешает SSH; arp.exe пишет в stderr,
-    # если записи нет, а PowerShell 5.1 при ErrorActionPreference=Stop считает это ошибкой
+    # a stale ARP entry for this address (from U-Boot) gets in the way of SSH; arp.exe writes
+    # to stderr when there is none, and PowerShell 5.1 with ErrorActionPreference=Stop fails on it
     if (-not $SshExe) { cmd.exe /c "arp -d $RouterIp >nul 2>&1" | Out-Null }
     $end = (Get-Date).AddSeconds(120)
     while ((Get-Date) -lt $end) {
         $r = Invoke-Ssh 'echo XR_SSH_OK' 15 -NoFail
-        if ($r.Out -match 'XR_SSH_OK') { Info "SSH до $RouterIp работает"; return }
+        if ($r.Out -match 'XR_SSH_OK') { Info (T "SSH to $RouterIp works" "SSH до $RouterIp работает"); return }
         Start-Sleep -Seconds 3
     }
-    Fail "нет SSH до $RouterIp. Кабель должен быть в LAN-порту роутера, у ПК - адрес $PcIp"
+    Fail (T "no SSH to $RouterIp. The cable must be in a LAN port of the router, the PC must have $PcIp" "нет SSH до $RouterIp. Кабель должен быть в LAN-порту роутера, у ПК - адрес $PcIp")
 }
 
 # ---------------------------------------------------------------------------
-# Копия стока
+# Stock backup
 # ---------------------------------------------------------------------------
 function Test-MtdLayout([string]$procMtd) {
     foreach ($p in $Layout) {
         $re = '(?m)^' + $p.Mtd + ': ([0-9a-f]{8}) ([0-9a-f]{8}) "' + $p.Name + '"'
-        if ($procMtd -notmatch $re) { Fail "в /proc/mtd нет $($p.Mtd) `"$($p.Name)`" - это не та разметка/не тот образ`n$procMtd" }
-        if ([Convert]::ToInt64($Matches[1], 16) -ne $p.Size) { Fail "$($p.Name): размер 0x$($Matches[1]), ожидался $(Format-Hex $p.Size)" }
+        if ($procMtd -notmatch $re) { Fail ((T "/proc/mtd has no $($p.Mtd) `"$($p.Name)`" - wrong layout or image" "в /proc/mtd нет $($p.Mtd) `"$($p.Name)`" - это не та разметка/не тот образ") + "`n$procMtd") }
+        if ([Convert]::ToInt64($Matches[1], 16) -ne $p.Size) { Fail (T "$($p.Name): size 0x$($Matches[1]), expected $(Format-Hex $p.Size)" "$($p.Name): размер 0x$($Matches[1]), ожидался $(Format-Hex $p.Size)") }
     }
 }
 
-# Отключить UBI от раздела ubi, чтобы ядро ничего не писало туда во время копии или записи.
+# Detach UBI from the ubi partition so the kernel writes nothing there during a dump or write.
 function Dismount-Ubi {
     Invoke-Ssh 'for b in /dev/ubiblock*; do [ -e "$b" ] && ubiblock -r "/dev/ubi${b#/dev/ubiblock}"; done; ubidetach -m 2 2>/dev/null; [ ! -e /sys/class/ubi/ubi0 ]' 60 | Out-Null
-    Info 'UBI отключён от раздела ubi'
+    Info (T 'UBI detached from the ubi partition' 'UBI отключён от раздела ubi')
 }
 
 function Save-Flash([string]$dir) {
-    Say "Снимаю копию всего флеша в $dir"
+    Say (T "Backing up the whole flash to $dir" "Снимаю копию всего флеша в $dir")
     $info = (Invoke-Ssh ('cat /proc/mtd; echo; cat /tmp/sysinfo/board_name; uname -a; ' +
         'for m in /sys/class/mtd/mtd[0-9]*; do [ -e $m/name ] && echo "$(basename $m) $(cat $m/name) bad_blocks=$(cat $m/bad_blocks 2>/dev/null) ecc_failures=$(cat $m/ecc_failures 2>/dev/null)"; done; ' +
         '[ -e /sys/class/ubi/ubi0 ] && echo XR_UBI_ATTACHED; dmesg | grep -i -E "spi-nand|nand|mtd|ubi" | head -50')).Out
     Set-Content -LiteralPath (Join-Path $dir 'router-info.txt') -Value $info -Encoding UTF8
-    if ($info -notmatch 'gemtek,xr1710g') { Fail "initramfs сообщает не тот board_name:`n$info" }
+    if ($info -notmatch 'gemtek,xr1710g') { Fail ((T 'the initramfs reports a wrong board_name:' 'initramfs сообщает не тот board_name:') + "`n$info") }
     if ($info -match 'XR_UBI_ATTACHED') {
-        # Ядро OpenWrt подключает раздел "ubi" само, если он начинается с UBI# - на
-        # стоке там банк tclinux и этого не бывает, значит роутер уже прошивали.
-        Warn 'в области ubi уже есть UBI и ядро его подключило - роутер прошивался раньше, это копия НЕ стока'
+        # The OpenWrt kernel attaches the "ubi" partition by itself when it starts with UBI# -
+        # on stock it holds a tclinux bank, so the router has been flashed before.
+        Warn (T 'the ubi area already holds UBI and the kernel attached it - the router was flashed before, this is NOT a stock backup' 'в области ubi уже есть UBI и ядро его подключило - роутер прошивался раньше, это копия НЕ стока')
         Dismount-Ubi
     }
     Test-MtdLayout $info
     foreach ($l in $info -split "`n") {
         if ($l -match '^(mtd\d) (\S+) bad_blocks=(\d+)' -and [int]$Matches[3] -gt 0) {
-            Warn "$($Matches[1]) ($($Matches[2])): плохих блоков $($Matches[3])"
+            Warn (T "$($Matches[1]) ($($Matches[2])): $($Matches[3]) bad blocks" "$($Matches[1]) ($($Matches[2])): плохих блоков $($Matches[3])")
         }
     }
     $sums = @()
     foreach ($p in $Layout) {
         $file = Join-Path $dir ('{0}-{1}.bin' -f $p.Mtd, $p.Name)
-        Info ("{0} {1} ({2} МиБ)..." -f $p.Mtd, $p.Name, [math]::Round($p.Size / 1MB, 1))
+        Info ((T '{0} {1} ({2} MiB)...' '{0} {1} ({2} МиБ)...') -f $p.Mtd, $p.Name, [math]::Round($p.Size / 1MB, 1))
         Invoke-Ssh "cat /dev/$($p.Mtd)" 1800 -OutFile $file | Out-Null
         $len = (Get-Item -LiteralPath $file).Length
-        if ($len -ne $p.Size) { Fail "$($p.Name): получено $len байт вместо $($p.Size)" }
+        if ($len -ne $p.Size) { Fail (T "$($p.Name): got $len bytes instead of $($p.Size)" "$($p.Name): получено $len байт вместо $($p.Size)") }
         $remote = (Invoke-Ssh "sha256sum /dev/$($p.Mtd)" 600).Out.Split(' ')[0].Trim()
         $local = Get-Sha256 $file
-        if ($remote -ne $local) { Fail "$($p.Name): sha256 копии ($local) не совпадает с флешем ($remote)" }
+        if ($remote -ne $local) { Fail (T "$($p.Name): sha256 of the copy ($local) does not match the flash ($remote)" "$($p.Name): sha256 копии ($local) не совпадает с флешем ($remote)") }
         $sums += "$local  $(Split-Path $file -Leaf)"
         Info "  ok, sha256 $local"
     }
@@ -811,12 +816,12 @@ function Save-Flash([string]$dir) {
     $fs = [IO.File]::OpenRead((Join-Path $dir 'mtd2-ubi.bin'))
     try { $fs.Read($head, 0, 4) | Out-Null } finally { $fs.Close() }
     if ([Text.Encoding]::ASCII.GetString($head) -eq 'UBI#') {
-        Warn 'в области ubi уже лежит UBI - роутер прошивался раньше, это копия НЕ стока. Сохраните более раннюю копию, если она есть.'
+        Warn (T 'the ubi area already holds UBI - the router was flashed before, this is NOT a stock backup. Keep an earlier backup if you have one.' 'в области ubi уже лежит UBI - роутер прошивался раньше, это копия НЕ стока. Сохраните более раннюю копию, если она есть.')
     }
 }
 
-# Том factory: EEPROM Wi-Fi и данные из DSD вендорского раздела - так же, как
-# files/installer/install.sh из hurrian/w1700k-ubi-installer, только на ПК.
+# The factory volume: Wi-Fi EEPROM and DSD data from the vendor partition - the same as
+# files/installer/install.sh in hurrian/w1700k-ubi-installer, only on the PC.
 function New-Factory([string]$vendorFile, [string]$outFile, [int]$eraseSize = 0x20000) {
     $v = [IO.File]::ReadAllBytes($vendorFile)
     $l1 = [Text.Encoding]::GetEncoding(28591)
@@ -828,20 +833,20 @@ function New-Factory([string]$vendorFile, [string]$outFile, [int]$eraseSize = 0x
     }
     $wan = Get-Dsd 'wan_mac'; $lan = Get-Dsd 'lan_mac'; $fan = Get-Dsd 'fan_id'; $serial = Get-Dsd 'serial_number'
     foreach ($k in @(@('wan_mac', $wan), @('lan_mac', $lan), @('fan_id', $fan), @('serial_number', $serial))) {
-        if (-not $k[1]) { Fail "в DSD (vendor+0x400000) нет $($k[0])" }
+        if (-not $k[1]) { Fail (T "DSD (vendor+0x400000) has no $($k[0])" "в DSD (vendor+0x400000) нет $($k[0])") }
     }
     foreach ($mac in @($wan, $lan)) {
-        if ($mac -notmatch '^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$') { Fail "неверный MAC в DSD: $mac" }
+        if ($mac -notmatch '^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$') { Fail (T "bad MAC in DSD: $mac" "неверный MAC в DSD: $mac") }
     }
     if (-not $serial.StartsWith('XR1710G')) {
-        Fail "серийный номер '$serial' - это не XR1710G (W1700K/W1701K этот скрипт не прошивает)"
+        Fail (T "serial number '$serial' is not an XR1710G (this script does not flash the W1700K/W1701K)" "серийный номер '$serial' - это не XR1710G (W1700K/W1701K этот скрипт не прошивает)")
     }
     $eeprom = -1
     for ($i = 0; $i -lt 4; $i++) {
         $o = 0x405000 + $i * $eraseSize
         if ($v[$o] -eq 0x90 -and $v[$o + 1] -eq 0x79) { $eeprom = $o; break }
     }
-    if ($eeprom -lt 0) { Fail 'EEPROM Wi-Fi (магия 0x7990, байты 90 79) не найдена в vendor с 0x405000' }
+    if ($eeprom -lt 0) { Fail (T 'Wi-Fi EEPROM (magic 0x7990, bytes 90 79) not found in vendor from 0x405000' 'EEPROM Wi-Fi (магия 0x7990, байты 90 79) не найдена в vendor с 0x405000') }
     $blob = New-Object byte[] 0x10000
     [Array]::Copy($v, $eeprom, $blob, 0, 0x1e00)
     $put = {
@@ -854,15 +859,15 @@ function New-Factory([string]$vendorFile, [string]$outFile, [int]$eraseSize = 0x
     & $put 0x7000 ([Text.Encoding]::ASCII.GetBytes($fan))
     & $put 0x8000 ([Text.Encoding]::ASCII.GetBytes($serial))
     [IO.File]::WriteAllBytes($outFile, $blob)
-    Info "серийный номер $serial, WAN $wan, LAN $lan, fan_id $fan"
-    Info ("EEPROM найдена по {0}, том factory собран ({1})" -f (Format-Hex $eeprom), (Split-Path $outFile -Leaf))
+    Info (T "serial number $serial, WAN $wan, LAN $lan, fan_id $fan" "серийный номер $serial, WAN $wan, LAN $lan, fan_id $fan")
+    Info ((T 'EEPROM found at {0}, factory volume built ({1})' 'EEPROM найдена по {0}, том factory собран ({1})') -f (Format-Hex $eeprom), (Split-Path $outFile -Leaf))
 }
 
 # ---------------------------------------------------------------------------
-# Установка UBI 2.0 и загрузчика
+# UBI 2.0 and loader install
 # ---------------------------------------------------------------------------
 function Install-Ubi([string]$dir, [string]$sysupgrade) {
-    Say 'Загрузка файлов на роутер (в ОЗУ)'
+    Say (T 'Uploading files to the router (RAM)' 'Загрузка файлов на роутер (в ОЗУ)')
     Invoke-Ssh 'rm -rf /tmp/xr && mkdir -p /tmp/xr' | Out-Null
     $up = [ordered]@{
         'install-ubi.sh' = (Join-Path $Root 'router\install-ubi.sh')
@@ -873,33 +878,33 @@ function Install-Ubi([string]$dir, [string]$sysupgrade) {
     foreach ($k in $up.Keys) {
         Invoke-Ssh "cat > /tmp/xr/$k" 300 -In $up[$k] | Out-Null
         $remote = (Invoke-Ssh "sha256sum /tmp/xr/$k").Out.Split(' ')[0].Trim()
-        if ($remote -ne (Get-Sha256 $up[$k])) { Fail "$k повредился при передаче" }
+        if ($remote -ne (Get-Sha256 $up[$k])) { Fail (T "$k was damaged in transfer" "$k повредился при передаче") }
         Info "$k ok"
     }
-    Say 'Разметка UBI 2.0 и установка OpenWrt (необратимая запись во флеш)'
+    Say (T 'UBI 2.0 layout and OpenWrt install (irreversible flash write)' 'Разметка UBI 2.0 и установка OpenWrt (необратимая запись во флеш)')
     $r = Invoke-Ssh 'sh /tmp/xr/install-ubi.sh /tmp/xr/factory.bin /tmp/xr/recovery.itb /tmp/xr/sysupgrade.itb 2>&1' 900 -Echo -NoFail
-    if ($r.ExitCode -ne 0 -or $r.Out -notmatch 'XR_INSTALL_OK') { Fail 'установка UBI не завершилась (вывод выше)' }
-    Info 'UBI 2.0 размечен, OpenWrt и том factory записаны и прочитаны обратно'
+    if ($r.ExitCode -ne 0 -or $r.Out -notmatch 'XR_INSTALL_OK') { Fail (T 'the UBI install did not finish (output above)' 'установка UBI не завершилась (вывод выше)') }
+    Info (T 'UBI 2.0 laid out, OpenWrt and the factory volume written and read back' 'UBI 2.0 размечен, OpenWrt и том factory записаны и прочитаны обратно')
 }
 
 function Restart-ToStock {
-    # Перезагрузка через консоль, а не через ssh: ssh замечает обрыв соединения
-    # секунды спустя, а стоковый загрузчик ждёт нажатия меньше секунды. Возвращает
-    # позицию вывода до перезагрузки, с которой Enter-StockUboot ищет баннер.
+    # Reboot over the console, not ssh: ssh notices the dropped connection seconds
+    # later, and the stock loader waits for a key for under a second. Returns the
+    # output position before the reboot, from which Enter-StockUboot looks for the banner.
     Invoke-Ssh 'sync' 60 -NoFail | Out-Null
     $m = $script:C.Mark()
     $script:C.Send("`rsync; reboot`r")
     return $m
 }
 
-# Запись слота chainloader командами стокового U-Boot и сверка чтением.
+# Write the chainloader slot with stock U-Boot commands and read it back.
 function Write-Slot([string]$path, [string]$what) {
-    Say "Запись $what в слот chainloader (0x600000, 1 МиБ)"
+    Say (T "Writing $what to the chainloader slot (0x600000, 1 MiB)" "Запись $what в слот chainloader (0x600000, 1 МиБ)")
     Invoke-Uboot "setenv ipaddr $UbootIp" | Out-Null
     Invoke-Uboot "setenv serverip $PcIp" | Out-Null
     Invoke-Uboot 'mw.b 0x89000000 0xff 0x100000' -NoFail | Out-Null
     $size = Invoke-TftpLoad $path '0x89000000'
-    if ($size -gt 0x100000) { Fail "$path больше 1 МиБ" }
+    if ($size -gt 0x100000) { Fail (T "$path is larger than 1 MiB" "$path больше 1 МиБ") }
     $hex = Format-Hex $size
     for ($try = 1; $try -le 2; $try++) {
         $o = Invoke-Uboot 'flash erase 0x600000 0x100000' 120
@@ -910,28 +915,28 @@ function Write-Slot([string]$path, [string]$what) {
         Invoke-Uboot 'flash read 0x600000 0x100000 0x8a000000' 120 | Out-Null
         $o = Invoke-Uboot "cmp.b 0x89000000 0x8a000000 $hex" 60 -NoFail
         if ($o -match 'Total of (\d+) byte') {
-            if ([int64]$Matches[1] -eq $size) { Info "слот прочитан обратно, $size байт совпадают"; return }
-            Warn "после записи совпало только $($Matches[1]) из $size байт"
+            if ([int64]$Matches[1] -eq $size) { Info (T "slot read back, $size bytes match" "слот прочитан обратно, $size байт совпадают"); return }
+            Warn (T "only $($Matches[1]) of $size bytes match after the write" "после записи совпало только $($Matches[1]) из $size байт")
             continue
         }
-        # в стоке нет cmp - сверяем сигнатуры
+        # no cmp in the stock loader - compare the signatures
         $o = Invoke-Uboot 'md.b 0x8a000000 0x4' -NoFail
         if ($o -match '8a000000:\s*([0-9a-f]{2}) ([0-9a-f]{2}) ([0-9a-f]{2}) ([0-9a-f]{2})') {
             $got = ($Matches[1..4] -join ' ')
             $want = (([IO.File]::ReadAllBytes($path))[0..3] | ForEach-Object { '{0:x2}' -f $_ }) -join ' '
-            if ($got -eq $want) { Warn "в стоковом U-Boot нет cmp, проверена только сигнатура ($got)"; return }
-            Warn "сигнатура слота $got, ожидалась $want"
+            if ($got -eq $want) { Warn (T "the stock U-Boot has no cmp, only the signature was checked ($got)" "в стоковом U-Boot нет cmp, проверена только сигнатура ($got)"); return }
+            Warn (T "slot signature $got, expected $want" "сигнатура слота $got, ожидалась $want")
             continue
         }
-        Fail 'не удалось проверить записанный слот'
+        Fail (T 'could not verify the written slot' 'не удалось проверить записанный слот')
     }
-    Fail 'слот chainloader не записался - в стоковом U-Boot ничего не сохранено, можно повторить'
+    Fail (T 'the chainloader slot was not written - nothing saved in the stock U-Boot, you can retry' 'слот chainloader не записался - в стоковом U-Boot ничего не сохранено, можно повторить')
 }
 
 function Set-Bootcmd([string]$kind) {
     $cur = Get-UbootVar 'bootcmd'
     $la = Get-UbootVar 'loadaddr'
-    Info "сейчас bootcmd='$cur' loadaddr='$la'"
+    Info (T "now bootcmd='$cur' loadaddr='$la'" "сейчас bootcmd='$cur' loadaddr='$la'")
     $changed = $false
     if ($kind -eq 'openwrt') {
         if ($cur -cne $OpenWrtBootcmd) { Set-UbootVar 'bootcmd' $OpenWrtBootcmd; $changed = $true }
@@ -942,13 +947,13 @@ function Set-Bootcmd([string]$kind) {
     if ($changed) {
         $o = Invoke-Uboot 'saveenv' 60
         if ($o -match '(?i)fail|error') { Fail "saveenv: $($o.Trim())" }
-        Info "bootcmd='$(Get-UbootVar 'bootcmd')' сохранён"
+        Info (T "bootcmd='$(Get-UbootVar 'bootcmd')' saved" "bootcmd='$(Get-UbootVar 'bootcmd')' сохранён")
     } else {
-        Info 'окружение стокового U-Boot менять не нужно'
+        Info (T 'the stock U-Boot environment needs no change' 'окружение стокового U-Boot менять не нужно')
     }
 }
 
-# Слот, bootcmd и первая загрузка OpenWrt - из уже остановленного стокового U-Boot.
+# Slot, bootcmd and the first OpenWrt boot - from an already stopped stock U-Boot.
 function Complete-Loader([string]$kind) {
     if ($kind -eq 'http') {
         Write-Slot (Join-Path $FwDir $Files.HttpUboot) 'http-uboot (xr1710g-chainloader-slot.bin)'
@@ -957,21 +962,21 @@ function Complete-Loader([string]$kind) {
     }
     Set-Bootcmd $kind
     Wait-OpenWrt
-    Say 'Готово.'
-    Info "OpenWrt: http://$RouterIp (root без пароля - задайте пароль)"
+    Say (T 'Done.' 'Готово.')
+    Info (T "OpenWrt: http://$RouterIp (root has no password - set one)" "OpenWrt: http://$RouterIp (root без пароля - задайте пароль)")
     if ($kind -eq 'http') {
-        Info 'Рекавери: кабель в порт 10GbE, держать reset при включении -> http://192.168.255.1'
+        Info (T 'Recovery: cable in the 10GbE port, hold reset at power-on -> http://192.168.255.1' 'Рекавери: кабель в порт 10GbE, держать reset при включении -> http://192.168.255.1')
     } else {
-        Info 'Рекавери: меню U-Boot в UART (TFTP / recovery из флеша)'
+        Info (T 'Recovery: U-Boot menu on the UART (TFTP / recovery from flash)' 'Рекавери: меню U-Boot в UART (TFTP / recovery из флеша)')
     }
 }
 
 function Wait-OpenWrt {
-    Say 'Перезагрузка в OpenWrt'
+    Say (T 'Rebooting into OpenWrt' 'Перезагрузка в OpenWrt')
     $m = $script:C.Mark()
     $script:C.Send("reset`r")
     if ($script:C.WaitFor('Please press Enter to activate this console', $m, (Scale 300)) -lt 0) {
-        Fail 'OpenWrt не загрузился за 5 минут - смотрите serial.log'
+        Fail (T 'OpenWrt did not boot within 5 minutes - see serial.log' 'OpenWrt не загрузился за 5 минут - смотрите serial.log')
     }
     Start-Sleep -Seconds 3
     $m = $script:C.Mark()
@@ -979,17 +984,18 @@ function Wait-OpenWrt {
     $script:C.WaitFor('root@[^\r\n]*# ?$', $m, 10000) | Out-Null
     $m = $script:C.Mark()
     $script:C.Send("echo XR_`"`"BOARD=`$(cat /tmp/sysinfo/board_name)`r")
-    if ($script:C.WaitFor('XR_BOARD=(\S+)', $m, 10000) -lt 0) { Fail 'OpenWrt загрузился, но shell не отвечает' }
+    if ($script:C.WaitFor('XR_BOARD=(\S+)', $m, 10000) -lt 0) { Fail (T 'OpenWrt booted, but the shell does not answer' 'OpenWrt загрузился, но shell не отвечает') }
     $board = $script:C.LastMatch.Groups[1].Value
-    Info "OpenWrt загрузился с флеша, board_name=$board"
+    Info (T "OpenWrt booted from flash, board_name=$board" "OpenWrt загрузился с флеша, board_name=$board")
 }
 
 # ---------------------------------------------------------------------------
-# Выбор загрузчика
+# Loader choice
 # ---------------------------------------------------------------------------
 function Select-Loader {
     if ($Loader) { return $Loader }
-    Write-Host @'
+    if ($script:Lang -eq 'ru') {
+        Write-Host @'
 
 Какой загрузчик поставить в слот chainloader?
 
@@ -1009,24 +1015,58 @@ function Select-Loader {
         (скрипт поставит сам)
 
 '@
-    $a = Read-Host 'Выбор [1/2]'
+    } else {
+        Write-Host @'
+
+Which loader goes into the chainloader slot?
+
+  [1] http-uboot (YYH2913/http-uboot, release xr1710g_260805) - recommended
+      + web recovery at http://192.168.255.1 with its own DHCP: flash OpenWrt
+        and the loader itself from a browser, no UART (reset button at power-on)
+      + 10GbE in the loader; full UBI rebuild with a choice of 2.0/1.5/1.0
+        layout and factory restored from DSD
+      + works with the stock bootcmd, the AXON environment is not changed
+      - third-party build (U-Boot 2026.07), sources with the author
+
+  [2] OpenWrt U-Boot (uboot-airoha, an7581_gemtek_xr1710g) - "vanilla"
+      + the same build as the Gemtek W1700K in OpenWrt; boot menu on the UART:
+        TFTP, recovery from flash, TFTP installer
+      - any recovery needs the UART and TFTP
+      - needs bootcmd 'flash read 0x600000 0x100000 $loadaddr; bootm' in AXON
+        (the script sets it)
+
+'@
+    }
+    $a = Read-Host (T 'Choice [1/2]' 'Выбор [1/2]')
     switch ($a) {
         '1' { return 'http' }
         '2' { return 'openwrt' }
-        default { Fail 'нужно 1 или 2' }
+        default { Fail (T 'enter 1 or 2' 'нужно 1 или 2') }
     }
 }
 
 # ---------------------------------------------------------------------------
-# Основной сценарий
+# Main flow
 # ---------------------------------------------------------------------------
 function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     return (New-Object Security.Principal.WindowsPrincipal $id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+if (-not $Lang) {
+    if ($Yes) { $Lang = 'en' }
+    else {
+        Write-Host ''
+        Write-Host '  [1] English'
+        Write-Host '  [2] Русский'
+        $Lang = if ((Read-Host 'Language / Язык [1]') -eq '2') { 'ru' } else { 'en' }
+    }
+    $PSBoundParameters['Lang'] = $Lang
+}
+$script:Lang = $Lang
+
 if (-not $SkipNetworkSetup -and -not (Test-Admin)) {
-    Write-Host 'Нужны права администратора (адрес на адаптере и правило брандмауэра для TFTP). Перезапуск...' -ForegroundColor Yellow
+    Write-Host (T 'Administrator rights are needed (adapter address and a firewall rule for TFTP). Restarting...' 'Нужны права администратора (адрес на адаптере и правило брандмауэра для TFTP). Перезапуск...') -ForegroundColor Yellow
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', (ConvertTo-Arg $PSCommandPath))
     foreach ($k in $PSBoundParameters.Keys) {
         $v = $PSBoundParameters[$k]
@@ -1038,12 +1078,12 @@ if (-not $SkipNetworkSetup -and -not (Test-Admin)) {
 }
 
 if (-not $BackupDir) {
-    if ($Mode -eq 'Restore') { Fail 'для Restore укажите -BackupDir с ранее снятой копией' }
+    if ($Mode -eq 'Restore') { Fail (T 'Restore needs -BackupDir with an earlier backup' 'для Restore укажите -BackupDir с ранее снятой копией') }
     $BackupDir = Join-Path $Root ('backup\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 }
 if ($Mode -ne 'Restore') {
     if ((Test-Path $BackupDir) -and @(Get-ChildItem -LiteralPath $BackupDir -Filter 'mtd*.bin').Count -gt 0) {
-        Fail "в $BackupDir уже есть копия - укажите другую папку, чтобы её не затереть"
+        Fail (T "$BackupDir already holds a backup - choose another folder so it is not overwritten" "в $BackupDir уже есть копия - укажите другую папку, чтобы её не затереть")
     }
     New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 }
@@ -1054,40 +1094,44 @@ $script:LogFile = Join-Path $BackupDir 'flash.log'
 
 $sysupgrade = Join-Path $FwDir $Files.Sysupgrade
 try {
-    Say "XR1710G: режим $Mode, папка $BackupDir"
+    Say (T "XR1710G: mode $Mode, folder $BackupDir" "XR1710G: режим $Mode, папка $BackupDir")
     Test-Bundle
     $kind = ''
     if ($Mode -eq 'Install') {
         if ($Firmware) { $sysupgrade = (Resolve-Path -LiteralPath $Firmware).Path }
         Test-Sysupgrade $sysupgrade
-        Info "прошивка: $sysupgrade"
+        Info (T "firmware: $sysupgrade" "прошивка: $sysupgrade")
         $kind = Select-Loader
-        Info "загрузчик: $kind"
+        Info (T "loader: $kind" "загрузчик: $kind")
     }
     if ($Mode -eq 'Loader') {
         $kind = Select-Loader
-        Info "загрузчик: $kind"
-        Confirm-Step @"
+        Info (T "loader: $kind" "загрузчик: $kind")
+        Confirm-Step (T @"
+The loader '$kind' will be written to the chainloader slot (0x600000) and the stock
+U-Boot bootcmd set for it. The ubi area is not touched: OpenWrt with the UBI 2.0
+layout must already be installed (Install got as far as writing the loader).
+"@ @"
 В слот chainloader (0x600000) запишется загрузчик '$kind', bootcmd стокового U-Boot
 будет настроен под него. Область ubi не трогается: OpenWrt в разметке UBI 2.0 уже
 должен быть установлен (режим Install дошёл до записи загрузчика).
-"@
+"@)
     }
     if ($Mode -eq 'Restore') {
         foreach ($f in @('mtd1-chainloader.bin', 'mtd2-ubi.bin', 'stock-uboot-env.txt', 'SHA256SUMS')) {
-            if (-not (Test-Path (Join-Path $BackupDir $f))) { Fail "в $BackupDir нет $f" }
+            if (-not (Test-Path (Join-Path $BackupDir $f))) { Fail (T "$BackupDir has no $f" "в $BackupDir нет $f") }
         }
         foreach ($l in Get-Content -LiteralPath (Join-Path $BackupDir 'SHA256SUMS')) {
             if ($l -match '^([0-9a-f]{64})\s+(\S+)$' -and (Get-Sha256 (Join-Path $BackupDir $Matches[2])) -ne $Matches[1]) {
-                Fail "копия повреждена: $($Matches[2])"
+                Fail (T "backup damaged: $($Matches[2])" "копия повреждена: $($Matches[2])")
             }
         }
         $stockEnv = Get-Content -LiteralPath (Join-Path $BackupDir 'stock-uboot-env.txt')
         $script:RestoreBootcmd = ($stockEnv | Where-Object { $_ -like 'bootcmd=*' } | Select-Object -First 1)
-        if (-not $script:RestoreBootcmd) { Fail 'в stock-uboot-env.txt нет bootcmd' }
+        if (-not $script:RestoreBootcmd) { Fail (T 'stock-uboot-env.txt has no bootcmd' 'в stock-uboot-env.txt нет bootcmd') }
         $script:RestoreBootcmd = $script:RestoreBootcmd.Substring(8)
-        Info "будет восстановлен bootcmd='$($script:RestoreBootcmd)'"
-        Confirm-Step 'Сток будет записан обратно поверх OpenWrt.'
+        Info (T "bootcmd will be restored to '$($script:RestoreBootcmd)'" "будет восстановлен bootcmd='$($script:RestoreBootcmd)'")
+        Confirm-Step (T 'The stock firmware will be written back over OpenWrt.' 'Сток будет записан обратно поверх OpenWrt.')
     }
 
     if (-not $SkipNetworkSetup) { Initialize-Network }
@@ -1102,7 +1146,15 @@ try {
         $script:C = New-Object XrConsole $port, (Join-Path $BackupDir 'serial.log')
     }
 
-    Write-Host @"
+    Write-Host (T @"
+
+Wiring:
+  * USB-UART 3.3 V to the header by the screw: TX, GND, VCC (do not connect), N/C, RX
+    (router TX -> adapter RX, router RX -> adapter TX)
+  * Ethernet cable from the PC to a gigabit LAN port of the router
+  * PC address $PcIp/24
+
+"@ @"
 
 Подключение:
   * USB-UART 3.3 В к разъёму у винта: TX, GND, VCC (не подключать), N/C, RX
@@ -1110,14 +1162,14 @@ try {
   * кабель Ethernet от ПК в гигабитный LAN-порт роутера
   * адрес ПК $PcIp/24
 
-"@ -ForegroundColor Green
-    Enter-StockUboot 'Включите питание роутера (если включён - выключите и включите)'
+"@) -ForegroundColor Green
+    Enter-StockUboot (T 'Power the router on (if it is on, power it off and on)' 'Включите питание роутера (если включён - выключите и включите)')
     $envText = Invoke-Uboot 'printenv' 30
     if ($Mode -in 'Install', 'Backup') {
         Set-Content -LiteralPath (Join-Path $BackupDir 'stock-uboot-env.txt') -Encoding UTF8 `
             -Value (($envText -replace "`r", '') -split "`n" | Where-Object { $_ -match '^[A-Za-z0-9_.]+=' })
     }
-    if ($envText -notmatch 'AXON|ecnt') { Warn 'в окружении нет AXON/ecnt - точно ли это стоковый загрузчик XR1710G?' }
+    if ($envText -notmatch 'AXON|ecnt') { Warn (T 'no AXON/ecnt in the environment - is this really the stock XR1710G loader?' 'в окружении нет AXON/ecnt - точно ли это стоковый загрузчик XR1710G?') }
     if ($Mode -eq 'Loader') {
         Complete-Loader $kind
         return
@@ -1127,21 +1179,21 @@ try {
     if ($Mode -eq 'Restore') {
         Test-MtdLayout (Invoke-Ssh 'cat /proc/mtd').Out
         Dismount-Ubi
-        Say 'Запись области ubi из копии (mtd write)'
+        Say (T 'Writing the ubi area from the backup (mtd write)' 'Запись области ubi из копии (mtd write)')
         $r = Invoke-Ssh 'mtd write - ubi 2>&1' 3600 -In (Join-Path $BackupDir 'mtd2-ubi.bin') -Echo -NoFail
-        if ($r.ExitCode -ne 0) { Fail 'mtd write завершился с ошибкой' }
+        if ($r.ExitCode -ne 0) { Fail (T 'mtd write failed' 'mtd write завершился с ошибкой') }
         $want = Get-Sha256 (Join-Path $BackupDir 'mtd2-ubi.bin')
         $got = (Invoke-Ssh 'sha256sum /dev/mtd2' 600).Out.Split(' ')[0].Trim()
-        if ($got -ne $want) { Warn 'чтение ubi не совпало с копией побайтно (так бывает при новых плохих блоках)' }
-        else { Info 'область ubi совпадает с копией' }
+        if ($got -ne $want) { Warn (T 'reading ubi back does not match the backup byte for byte (happens with new bad blocks)' 'чтение ubi не совпало с копией побайтно (так бывает при новых плохих блоках)') }
+        else { Info (T 'the ubi area matches the backup' 'область ubi совпадает с копией') }
         $m = Restart-ToStock
-        Enter-StockUboot 'Перезагрузка в стоковый U-Boot' $m
-        Write-Slot (Join-Path $BackupDir 'mtd1-chainloader.bin') 'стоковое начало tclinux'
+        Enter-StockUboot (T 'Rebooting into the stock U-Boot' 'Перезагрузка в стоковый U-Boot') $m
+        Write-Slot (Join-Path $BackupDir 'mtd1-chainloader.bin') (T 'the stock start of tclinux' 'стоковое начало tclinux')
         if ((Get-UbootVar 'bootcmd') -cne $script:RestoreBootcmd) {
             Set-UbootVar 'bootcmd' $script:RestoreBootcmd
             Invoke-Uboot 'saveenv' 60 | Out-Null
         }
-        Say 'Готово: сток записан обратно. Роутер перезагружается в стоковую прошивку.'
+        Say (T 'Done: the stock firmware is back. The router is rebooting into it.' 'Готово: сток записан обратно. Роутер перезагружается в стоковую прошивку.')
         $script:C.Send("reset`r")
         Start-Sleep -Seconds 5
         return
@@ -1149,32 +1201,36 @@ try {
 
     Save-Flash $BackupDir
     New-Factory (Join-Path $BackupDir 'mtd0-vendor.bin') (Join-Path $BackupDir 'factory.bin')
-    Say "Копия стока сохранена: $BackupDir"
-    Info 'сохраните эту папку отдельно - это единственный способ вернуть сток'
+    Say (T "Stock backup saved: $BackupDir" "Копия стока сохранена: $BackupDir")
+    Info (T 'keep this folder safe - it is the only way back to the stock firmware' 'сохраните эту папку отдельно - это единственный способ вернуть сток')
 
     if ($Mode -eq 'Backup') {
         Restart-ToStock | Out-Null
-        Say 'Готово (только копия). Роутер перезагружается в стоковую прошивку, во флеш ничего не писалось.'
+        Say (T 'Done (backup only). The router is rebooting into the stock firmware, nothing was written to flash.' 'Готово (только копия). Роутер перезагружается в стоковую прошивку, во флеш ничего не писалось.')
         Start-Sleep -Seconds 3
         return
     }
 
-    Confirm-Step @"
+    Confirm-Step (T @"
+The flash will now be repartitioned: the stock firmware in the ubi area
+(0x700000-0x1be00000) will be erased, the loader '$kind' goes into the chainloader slot.
+The vendor loader (0x0-0x600000) and the BMT reserve at the end of flash are not touched.
+"@ @"
 Дальше флеш будет переразмечен: стоковая прошивка в области ubi (0x700000-0x1be00000)
 будет стёрта, в слот chainloader запишется загрузчик '$kind'.
 Вендорский загрузчик (0x0-0x600000) и резерв BMT в конце флеша не трогаются.
-"@
+"@)
     Install-Ubi $BackupDir $sysupgrade
     $m = Restart-ToStock
-    Enter-StockUboot 'Перезагрузка в стоковый U-Boot для записи загрузчика' $m
+    Enter-StockUboot (T 'Rebooting into the stock U-Boot to write the loader' 'Перезагрузка в стоковый U-Boot для записи загрузчика') $m
     Complete-Loader $kind
-    Info "Копия стока: $BackupDir"
+    Info (T "Stock backup: $BackupDir" "Копия стока: $BackupDir")
 }
 catch {
     Write-Host ''
-    Write-Host "ОШИБКА: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "$(T 'ERROR' 'ОШИБКА'): $($_.Exception.Message)" -ForegroundColor Red
     Write-Log "ERROR: $($_.Exception.Message)`n$($_.ScriptStackTrace)"
-    Write-Host "Журналы: $BackupDir\flash.log и serial.log" -ForegroundColor Red
+    Write-Host (T "Logs: $BackupDir\flash.log and serial.log" "Журналы: $BackupDir\flash.log и serial.log") -ForegroundColor Red
     exit 1
 }
 finally {

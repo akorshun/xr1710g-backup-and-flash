@@ -1,232 +1,243 @@
-# XR1710G: копия стока и OpenWrt с разметкой UBI 2.0 — из Windows одним скриптом
+# XR1710G: stock backup and OpenWrt with the UBI 2.0 layout, from Windows in one script
 
-Скрипт для Gemtek XR1710G (Brightspeed XR1710G, Airoha AN7581, 512 МиБ SPI-NAND).
-Он работает со стоковой прошивки до готового OpenWrt и всё делает сам:
+**English** | [Русский](README.ru.md)
 
-1. останавливает стоковый загрузчик через UART и **снимает полную копию флеша**
-   на ПК (все 512 МиБ со сверкой sha256), пока во флеш ещё ничего не записано;
-2. размечает флеш сразу под **UBI 2.0** (`ubi` = `0x700000 + 0x1b700000`, резерв
-   528 PEB под BMT вендорского загрузчика) и ставит OpenWrt;
-3. пишет в слот `chainloader` **выбранный загрузчик** — U-Boot с HTTP-рекавери
-   (YYH2913) или ванильный чейнлоадер U-Boot OpenWrt;
-4. перезагружает роутер и проверяет, что OpenWrt поднялся с флеша.
+A script for the Gemtek XR1710G (Brightspeed XR1710G, Airoha AN7581, 512 MiB SPI-NAND).
+It takes the router from the stock firmware to a working OpenWrt by itself:
 
-Отдельно есть режимы «только копия» и «вернуть сток из копии».
+1. stops the stock boot loader over UART and **takes a full flash backup** to the
+   PC (all 512 MiB, checked with sha256) before anything is written to flash;
+2. lays the flash out for **UBI 2.0** right away (`ubi` = `0x700000 + 0x1b700000`,
+   528 PEBs reserved for the vendor loader's BMT) and installs OpenWrt;
+3. writes **the loader of your choice** to the `chainloader` slot — U-Boot with
+   HTTP recovery (YYH2913) or the vanilla OpenWrt chainloaded U-Boot;
+4. reboots the router and checks that OpenWrt came up from flash.
+
+There are also "backup only", "restore stock from a backup" and "loader only" modes.
+Messages are in English or Russian: the script asks at start (`-Lang en` / `-Lang ru`
+skips the question).
 
 > [!NOTE]
-> **Проверено на железе (XR1710G, 28.10.2026):** копия стока, разметка UBI 2.0,
-> установка OpenWrt `xr1710g-r2` и загрузчик OpenWrt (`-Loader openwrt`) —
-> роутер загружается в OpenWrt, Ethernet и Wi-Fi (EEPROM из тома factory)
-> работают. Загрузчик http-uboot (`-Loader http`) и режим Restore пока
-> проверены только на эмуляторе (`tests/`). Копия стока снимается первой,
-> вендорский загрузчик (0x0–0x600000) не трогается никогда, а UART остаётся
-> рабочим способом восстановления.
+> **Verified on hardware (XR1710G, 2026-10-28):** stock backup, UBI 2.0 layout,
+> OpenWrt `xr1710g-r2` install and the OpenWrt loader (`-Loader openwrt`) — the
+> router boots OpenWrt, Ethernet and Wi-Fi (EEPROM from the factory volume) work.
+> The http-uboot loader (`-Loader http`) and Restore mode are so far covered only
+> by the emulator (`tests/`). The stock backup is taken first, the vendor loader
+> (0x0–0x600000) is never touched, and the UART stays a working way to recover.
 
-## Что нужно
+## What you need
 
-* XR1710G на стоковой прошивке (или уже прошитый — тогда «копия» будет копией
-  того, что стоит сейчас; скрипт об этом предупредит);
-* USB-UART адаптер **3,3 В** (CH340, CP2102, FT232, PL2303) с драйвером;
-* отвёртка Torx T10, Ethernet-кабель;
-* Windows 10/11, PowerShell 5.1 (есть в системе), **клиент OpenSSH**
-  (Параметры → Система → Дополнительные компоненты; в Windows 11 обычно уже
-  стоит), права администратора;
-* ~600 МБ свободного места под копию.
+* an XR1710G on the stock firmware (or already flashed — then the "backup" is a
+  copy of whatever is there now; the script warns about it);
+* a **3.3 V** USB-UART adapter (CH340, CP2102, FT232, PL2303) with its driver;
+* a Torx T10 screwdriver, an Ethernet cable;
+* Windows 10/11, PowerShell 5.1 (built in), the **OpenSSH client**
+  (Settings → System → Optional features; usually already present on Windows 11),
+  administrator rights;
+* ~600 MB of free space for the backup.
 
-## Подключение
+## Wiring
 
-1. Под наклейкой с QR-кодом винт Torx T10. Выкрутить, затем развести серую и
-   белую половины корпуса, начиная со стороны портов — защёлки по всему периметру.
-2. Разъём UART рядом с винтом, считая от винта: **TX – GND – VCC – N/C – RX**,
-   115200 8N1. Подключить GND, TX роутера → RX адаптера, RX роутера → TX
-   адаптера. **VCC не подключать.**
-3. Ethernet от ПК — в **гигабитный LAN-порт** роутера. Сетевой драйвер стокового
-   загрузчика капризный: если TFTP не идёт, скрипт повторит, а переткнуть кабель
-   в другой порт можно прямо во время повторов.
+1. A Torx T10 screw sits under the QR-code sticker. Remove it, then pry the grey
+   and white halves of the case apart starting at the port side — there are
+   latches all around.
+2. The UART header is next to the screw, counting from the screw:
+   **TX – GND – VCC – N/C – RX**, 115200 8N1. Connect GND, router TX → adapter RX,
+   router RX → adapter TX. **Do not connect VCC.**
+3. Ethernet from the PC goes to a **gigabit LAN port** of the router. The stock
+   loader's network driver is flaky: if TFTP fails the script retries, and you can
+   move the cable to another port while it does.
 
-Адрес `192.168.1.10/24` на этом адаптере скрипт задаст сам (и вернёт DHCP в
-конце), так же как и временное правило брандмауэра для TFTP (UDP 69).
+The script sets `192.168.1.10/24` on that adapter itself (and puts DHCP back at
+the end), as well as a temporary firewall rule for TFTP (UDP 69).
 
-## Какой загрузчик выбрать
+## Which loader to choose
 
-Стоковый загрузчик (U-Boot 2014.04 «AXON 1.6», подписанный) остаётся на месте и
-грузит то, что лежит в слоте `chainloader` (0x600000, 1 МиБ). Туда ставится один
-из двух вариантов; обе сборки работают с разметкой UBI 2.0.
+The stock loader (U-Boot 2014.04 "AXON 1.6", signed) stays in place and boots
+whatever sits in the `chainloader` slot (0x600000, 1 MiB). One of two loaders goes
+there; both work with the UBI 2.0 layout.
 
-| | **http-uboot** (YYH2913, `xr1710g_260805`) — по умолчанию | **U-Boot OpenWrt** (`uboot-airoha`, ванильный) |
+| | **http-uboot** (YYH2913, `xr1710g_260805`) — default | **OpenWrt U-Boot** (`uboot-airoha`, vanilla) |
 |---|---|---|
-| Версия | U-Boot 2026.07, сторонняя сборка | U-Boot 2026.01 из OpenWrt, конфигурация Gemtek W1700K |
-| Рекавери | веб-страница `http://192.168.255.1`, свой DHCP; заливка `sysupgrade.itb` и самого загрузчика из браузера | меню в UART: TFTP, recovery из флеша, установщик по TFTP |
-| Как войти в рекавери | кабель в порт **10GbE**, держать **reset** при включении, отпустить, когда индикатор сменит красный на «бегущий» | только UART (USB-UART + TFTP-сервер на ПК) |
-| Нужен ли UART после установки | нет | да, для любого восстановления |
-| Сеть в загрузчике | 10GbE | гигабитные порты |
-| Пересоздание UBI | из веб-интерфейса, с выбором раскладки 2.0 / 1.5 / 1.0 и восстановлением factory из DSD | вручную из initramfs |
-| Окружение AXON | не меняется: слот «двухвходовый», работает со стоковым `bootcmd` | `bootcmd` меняется на `flash read 0x600000 0x100000 $loadaddr; bootm` (как в инструкции OpenWrt) |
-| Происхождение | бинарник из релиза автора, исходники в [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | собран из [akorshun/openwrt `xr1710g-r2`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r2) |
+| Version | U-Boot 2026.07, third-party build | U-Boot 2026.01 from OpenWrt, Gemtek W1700K configuration |
+| Recovery | web page at `http://192.168.255.1` with its own DHCP; upload `sysupgrade.itb` and the loader itself from a browser | UART menu: TFTP, recovery from flash, TFTP installer |
+| How to enter recovery | cable in the **10GbE** port, hold **reset** at power-on, release when the LED goes from red to "running" | UART only (USB-UART + a TFTP server on the PC) |
+| UART needed after install | no | yes, for any recovery |
+| Network in the loader | 10GbE | gigabit ports |
+| UBI rebuild | from the web UI, with a choice of 2.0 / 1.5 / 1.0 layout and factory restored from DSD | by hand from an initramfs |
+| AXON environment | unchanged: the slot is "dual-entry" and works with the stock `bootcmd` | `bootcmd` becomes `flash read 0x600000 0x100000 $loadaddr; bootm` (as in the OpenWrt instructions) |
+| Origin | binary from the author's release, sources in [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | built from [akorshun/openwrt `xr1710g-r2`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r2) |
 
-Оба варианта загружают OpenWrt из тома `fit`, обновления ставятся обычным
-`sysupgrade`. Если сомневаетесь — берите **http-uboot**: без UART его можно
-восстановить из браузера. Сменить загрузчик позже можно его же веб-страницей
-(http-uboot) или повторным запуском скрипта.
+Both boot OpenWrt from the `fit` volume; updates are a plain `sysupgrade`. If in
+doubt, take **http-uboot**: it can be recovered from a browser without a UART.
+You can switch loaders later with http-uboot's own web page or with
+`-Mode Loader`.
 
-## Запуск
+## Running it
 
-Скачать репозиторий (Code → Download ZIP или `git clone`), распаковать, затем
-**двойной щелчок по `xr1710g-flash.cmd`** — или из PowerShell:
+Download the repository (Code → Download ZIP, or `git clone`), unpack it, then
+**double-click `xr1710g-flash.cmd`** — or from PowerShell:
 
 ```powershell
-.\xr1710g-flash.ps1                              # установка, всё спросит
-.\xr1710g-flash.ps1 -ComPort COM5 -Loader http   # без вопросов о порте и загрузчике
-.\xr1710g-flash.ps1 -Mode Backup                 # только копия стока, флеш не трогается
+.\xr1710g-flash.ps1                              # install, asks for everything
+.\xr1710g-flash.ps1 -Lang en                     # English messages, no language question
+.\xr1710g-flash.ps1 -ComPort COM5 -Loader http   # no questions about the port and loader
+.\xr1710g-flash.ps1 -Mode Backup                 # stock backup only, flash untouched
 .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
-.\xr1710g-flash.ps1 -Mode Loader -Loader openwrt   # только слот + bootcmd (см. ниже)
-.\xr1710g-flash.ps1 -Firmware D:\my-sysupgrade.itb   # своя сборка OpenWrt
+.\xr1710g-flash.ps1 -Mode Loader -Loader openwrt   # slot + bootcmd only (see below)
+.\xr1710g-flash.ps1 -Firmware D:\my-sysupgrade.itb   # your own OpenWrt build
 ```
 
-Скрипт сам попросит права администратора. Дальше:
+The script asks for administrator rights itself. Then it:
 
-1. спросит COM-порт и загрузчик (если не заданы параметрами);
-2. попросит **включить питание** роутера — сам прервёт автозагрузку;
-3. снимет копию (несколько минут), покажет серийный номер и MAC-адреса;
-4. **спросит подтверждение** (`YES`) перед первой записью во флеш;
-5. разметит UBI, поставит OpenWrt, перезагрузится, запишет загрузчик, ещё раз
-   перезагрузится и дождётся OpenWrt.
+1. asks for the message language (English / Русский, English by default; not asked
+   with `-Lang en` or `-Lang ru`), the COM port and the loader (unless given as
+   parameters);
+2. asks you to **power the router on** — it stops autoboot itself;
+3. takes the backup (a few minutes), shows the serial number and MAC addresses;
+4. **asks for confirmation** (`YES`) before the first flash write;
+5. lays out UBI, installs OpenWrt, reboots, writes the loader, reboots again and
+   waits for OpenWrt.
 
-Всего ~10–15 минут. Весь вывод консоли роутера пишется в `serial.log`, шаги
-скрипта — в `flash.log`, оба лежат в папке копии.
+About 10–15 minutes in total. All router console output goes to `serial.log`, the
+script's steps to `flash.log`; both are in the backup folder.
 
-### Что происходит внутри
+### What happens inside
 
-| Шаг | Где выполняется | Запись во флеш |
+| Step | Runs in | Flash write |
 |---|---|---|
-| Прерывание стокового U-Boot, `printenv` → `stock-uboot-env.txt` | AXON U-Boot | нет |
-| TFTP `chainload-uboot.itb` в ОЗУ, `bootm` | AXON U-Boot | нет |
-| TFTP `xr1710g-backup-initramfs.itb` в ОЗУ, `bootm` | U-Boot OpenWrt в ОЗУ | нет |
-| SSH-ключ через консоль, копия `mtd0…mtd3` по SSH со сверкой sha256 | initramfs в ОЗУ | нет |
-| Сборка тома `factory` из `mtd0-vendor.bin` | ПК | нет |
-| `ubiformat` области `ubi`, тома, OpenWrt, чтение обратно | initramfs в ОЗУ | **да** (0x700000–0x1be00000) |
-| TFTP загрузчика, `flash erase/write 0x600000`, сверка `cmp.b` | AXON U-Boot | **да** (0x600000–0x700000) |
-| `setenv bootcmd …; saveenv` — только для U-Boot OpenWrt | AXON U-Boot | окружение AXON |
-| `reset`, ожидание OpenWrt, проверка `board_name` | — | нет |
+| Stop the stock U-Boot, `printenv` → `stock-uboot-env.txt` | AXON U-Boot | no |
+| TFTP `chainload-uboot.itb` into RAM, `bootm` | AXON U-Boot | no |
+| TFTP `xr1710g-backup-initramfs.itb` into RAM, `bootm` | OpenWrt U-Boot in RAM | no |
+| SSH key over the console, dump `mtd0…mtd3` over SSH with sha256 checks | initramfs in RAM | no |
+| Build the `factory` volume from `mtd0-vendor.bin` | PC | no |
+| `ubiformat` of the `ubi` area, volumes, OpenWrt, read back | initramfs in RAM | **yes** (0x700000–0x1be00000) |
+| TFTP the loader, `flash erase/write 0x600000`, check with `cmp.b` | AXON U-Boot | **yes** (0x600000–0x700000) |
+| `setenv bootcmd …; saveenv` — only for the OpenWrt U-Boot | AXON U-Boot | AXON environment |
+| `reset`, wait for OpenWrt, check `board_name` | — | no |
 
-`xr1710g-backup-initramfs.itb` — это `initramfs-recovery.itb` из той же сборки
-OpenWrt с двумя изменениями в DTB (см. `tools/make-backup-initramfs.py`,
-изменяется 39 байт, размеры не меняются, хеши FIT пересчитаны):
+`xr1710g-backup-initramfs.itb` is the `initramfs-recovery.itb` from the same
+OpenWrt build with two changes in its DTB (see `tools/make-backup-initramfs.py`;
+39 bytes change, no sizes change, the FIT hashes are recomputed):
 
-* у раздела `ubi` убран `compatible = "linux,ubi"`, чтобы ядро не пыталось
-  подключить UBI поверх стоковых данных до того, как с них снята копия;
-* у MAC-узлов Ethernet (`gdm1`, `gdm2`, `gdm4`) отключены `nvmem-cells`: они
-  ссылаются на том `factory` в UBI, которого на стоке нет, и без этого драйвер
-  Ethernet бесконечно ждёт его (deferred probe) и сети в initramfs нет —
-  именно так было при первом запуске на железе. Без них MAC случайный.
+* the `ubi` partition loses `compatible = "linux,ubi"`, so the kernel does not try
+  to attach UBI over the stock data before it is backed up;
+* the Ethernet MAC nodes (`gdm1`, `gdm2`, `gdm4`) lose their `nvmem-cells`: they
+  point at the `factory` volume in UBI, which a stock router does not have, and
+  without this change the Ethernet driver waits for it forever (deferred probe),
+  leaving the initramfs without network — exactly what happened on the first
+  hardware run. Without them the MACs are random.
 
-Кроме того, ядро OpenWrt подключает раздел с
-именем `ubi` само, если он начинается с `UBI#` (патч 490). На стоке там лежит
-банк `tclinux` и этого не происходит. Если роутер уже прошивали, скрипт
-предупредит, что копия будет не стоковой, и отключит UBI (`ubidetach`) перед
-копией и перед восстановлением.
+Also, the OpenWrt kernel attaches a partition named `ubi` by itself when it
+starts with `UBI#` (patch 490). On stock it holds a `tclinux` bank and this does
+not happen. If the router was flashed before, the script warns that the backup
+is not stock and detaches UBI (`ubidetach`) before the backup and before a restore.
 
-Стоковый `bootcmd` бывает разным: в README http-uboot это
-`flash read 0x602100 0x4000000 $loadaddr; bootm`, а на одном из наших XR1710G
-с тем же AXON 1.6 — `flash imgread 2048;bootm`. Для http-uboot скрипт оставляет
-только формы, которые его автор указал как рабочие, а любую другую заменяет на
-`flash read 0x602100 0x4000000 $loadaddr; bootm`. Исходное значение сохраняется
-в `stock-uboot-env.txt` и возвращается режимом Restore.
+The stock `bootcmd` varies: the http-uboot README gives
+`flash read 0x602100 0x4000000 $loadaddr; bootm`, while one of our XR1710G units
+with the same AXON 1.6 has `flash imgread 2048;bootm`. For http-uboot the script
+keeps only the forms its author lists as working and replaces anything else with
+`flash read 0x602100 0x4000000 $loadaddr; bootm`. The original value is saved in
+`stock-uboot-env.txt` and put back by Restore mode.
 
-Слот пишется **командой стокового загрузчика** `flash write`, как в инструкции
-OpenWrt для W1700K: этот загрузчик читает слот через свою таблицу BMT, и только
-его собственная запись гарантированно ляжет туда, откуда он потом читает.
+The slot is written **with the stock loader's own** `flash write`, as in the
+OpenWrt W1700K instructions: that loader reads the slot through its BMT table,
+and only its own write is guaranteed to land where it later reads from.
 
-## Копия стока
+## Stock backup
 
-Папка `backup\<дата-время>\`:
+Folder `backup\<date-time>\`:
 
-| Файл | Что это |
+| File | What it is |
 |---|---|
-| `mtd0-vendor.bin` | 6 МиБ: загрузчик AXON, его окружение, DSD (MAC, серийный номер), EEPROM Wi-Fi |
-| `mtd1-chainloader.bin` | 1 МиБ: начало стокового банка `tclinux` |
-| `mtd2-ubi.bin` | 439 МиБ: стоковые банки прошивки и данные |
-| `mtd3-reserved_bmt.bin` | 66 МиБ: хвост флеша с таблицами BMT вендора |
-| `SHA256SUMS` | суммы, сверенные с флешем на роутере |
-| `stock-uboot-env.txt` | `printenv` стокового загрузчика |
-| `factory.bin` | собранный том `factory` (EEPROM + MAC + fan_id + серийный номер) |
-| `router-info.txt`, `flash.log`, `serial.log` | `/proc/mtd`, плохие блоки, журналы |
+| `mtd0-vendor.bin` | 6 MiB: AXON loader, its environment, DSD (MACs, serial number), Wi-Fi EEPROM |
+| `mtd1-chainloader.bin` | 1 MiB: the start of the stock `tclinux` bank |
+| `mtd2-ubi.bin` | 439 MiB: stock firmware banks and data |
+| `mtd3-reserved_bmt.bin` | 66 MiB: the end of flash with the vendor BMT tables |
+| `SHA256SUMS` | sums checked against the flash on the router |
+| `stock-uboot-env.txt` | `printenv` of the stock loader |
+| `factory.bin` | the built `factory` volume (EEPROM + MACs + fan_id + serial number) |
+| `router-info.txt`, `flash.log`, `serial.log` | `/proc/mtd`, bad blocks, logs |
 
-Копия снимается из Linux «как есть» (данные после ECC, без OOB). Сохраните
-папку отдельно — это единственный способ вернуть сток.
+The backup is read from Linux as is (data after ECC, no OOB). Keep the folder
+somewhere safe — it is the only way back to the stock firmware.
 
-### Вернуть сток
+### Restoring the stock firmware
 
 ```powershell
 .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
 ```
 
-Скрипт снова загрузит initramfs в ОЗУ, запишет `mtd2-ubi.bin` в область `ubi`
-(`mtd write`), затем стоковым загрузчиком вернёт `mtd1-chainloader.bin` в слот и
-`bootcmd` из `stock-uboot-env.txt`. Если с момента копии во флеше появились
-новые плохие блоки, побайтного совпадения не будет — скрипт предупредит.
+The script boots the initramfs into RAM again, writes `mtd2-ubi.bin` to the `ubi`
+area (`mtd write`), then uses the stock loader to put `mtd1-chainloader.bin` back
+into the slot and `bootcmd` back from `stock-uboot-env.txt`. If new bad blocks
+appeared since the backup, the read-back will not match byte for byte — the
+script warns about it.
 
-### Только загрузчик (`-Mode Loader`)
+### Loader only (`-Mode Loader`)
 
 ```powershell
-.\xr1710g-flash.ps1 -Mode Loader -Loader openwrt   # или -Loader http
+.\xr1710g-flash.ps1 -Mode Loader -Loader openwrt   # or -Loader http
 ```
 
-Последний шаг установки отдельно: стоковым U-Boot записать выбранный загрузчик в
-слот `0x600000`, настроить `bootcmd` и дождаться OpenWrt. Область `ubi` не
-трогается, копия не снимается. Нужен, если Install оборвался после разметки
-UBI 2.0 (в журнале есть «UBI 2.0 размечен»), а также чтобы сменить
-http-uboot на загрузчик OpenWrt или обратно.
+The last install step on its own: write the chosen loader to slot `0x600000` with
+the stock U-Boot, set `bootcmd` and wait for OpenWrt. The `ubi` area is not
+touched and no backup is taken. Use it when Install stopped after the UBI 2.0
+layout was written (the log says "UBI 2.0 laid out"), or to switch between
+http-uboot and the OpenWrt loader.
 
-## Разметка UBI 2.0
+## UBI 2.0 layout
 
-| Раздел | Смещение | Размер | |
+| Partition | Offset | Size | |
 |---|---|---|---|
-| `vendor` | `0x00000000` | `0x00600000` | загрузчик AXON, `uenv`, `dsd` — не трогается |
-| `chainloader` | `0x00600000` | `0x00100000` | http-uboot или U-Boot OpenWrt |
-| `ubi` | `0x00700000` | `0x1b700000` | UBI, конец `0x1be00000` |
-| `reserved_bmt` | `0x1be00000` | `0x04200000` | 528 PEB под BMT вендора — не трогается |
+| `vendor` | `0x00000000` | `0x00600000` | AXON loader, `uenv`, `dsd` — not touched |
+| `chainloader` | `0x00600000` | `0x00100000` | http-uboot or OpenWrt U-Boot |
+| `ubi` | `0x00700000` | `0x1b700000` | UBI, ends at `0x1be00000` |
+| `reserved_bmt` | `0x1be00000` | `0x04200000` | 528 PEBs for the vendor BMT — not touched |
 
-Тома UBI (как в установщике hurrian): `0 ubootenv`, `1 ubootenv2`,
-`2 factory` (static, 64 КиБ: EEPROM @0, WAN MAC @0x5000, LAN MAC @0x6000,
-fan_id @0x7000, серийный номер @0x8000), `3 recovery` (initramfs OpenWrt),
-`fit` и `rootfs_data` — их создаёт `nand_upgrade_fit` из OpenWrt.
+UBI volumes (as in hurrian's installer): `0 ubootenv`, `1 ubootenv2`,
+`2 factory` (static, 64 KiB: EEPROM @0, WAN MAC @0x5000, LAN MAC @0x6000,
+fan_id @0x7000, serial number @0x8000), `3 recovery` (OpenWrt initramfs),
+`fit` and `rootfs_data` — created by OpenWrt's `nand_upgrade_fit`.
 
-Образ, который вы ставите (в том числе потом через рекавери http-uboot),
-должен быть собран с той же разметкой: в DTB внутри FIT
-`ubi` = `<0x00700000 0x1b700000>`. Скрипт проверяет это для `-Firmware` и
-отказывается ставить образы UBI 1.5 (`0x1d9c0000`) и UBI 1.0 (`0x1f700000`).
-В веб-рекавери http-uboot для таких образов выбирайте **UBI 2.0**.
+Any image you install (including later through http-uboot's recovery) must be
+built with the same layout: the DTB inside the FIT has
+`ubi` = `<0x00700000 0x1b700000>`. The script checks this for `-Firmware` and
+refuses UBI 1.5 (`0x1d9c0000`) and UBI 1.0 (`0x1f700000`) images. In the
+http-uboot web recovery pick **UBI 2.0** for such images.
 
-## После установки
+## After the install
 
-* OpenWrt: `http://192.168.1.1`, `root` без пароля — задайте пароль.
-* Обновления: `sysupgrade` с `*-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb`.
-* Рекавери http-uboot: ПК в порт 10GbE с DHCP, reset при включении,
-  `http://192.168.255.1`, цель `firmware`, раскладка `UBI 2.0`.
-* Рекавери U-Boot OpenWrt: UART, меню загрузчика, «Boot system via TFTP»
-  (ПК `192.168.1.10`, файл
-  `openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb`) или
-  «Boot recovery system from flash».
+* OpenWrt: `http://192.168.1.1`, `root` has no password — set one.
+* Updates: `sysupgrade` with `*-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb`.
+* Wi-Fi radios start disabled, as usual in OpenWrt. On this build `wifi config`
+  may leave out `band` for the third radio: set `wireless.radio2.band='6g'` and a
+  fixed 6 GHz channel (for example `37`) — automatic channel selection did not
+  start the 6 GHz AP on our unit.
+* http-uboot recovery: PC in the 10GbE port with DHCP, reset at power-on,
+  `http://192.168.255.1`, target `firmware`, layout `UBI 2.0`.
+* OpenWrt U-Boot recovery: UART, loader menu, "Boot system via TFTP"
+  (PC `192.168.1.10`, file
+  `openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb`) or
+  "Boot recovery system from flash".
 
-## Если что-то пошло не так
+## If something goes wrong
 
-* **«стоковый U-Boot так и не появился»** — проверьте COM-порт, GND, TX/RX
-  (часто перепутаны), что адаптер на 3,3 В.
-* **«не удалось остановить загрузку»** — скрипт попросит передёрнуть питание и
-  попробует снова.
-* **TFTP не идёт** — кабель в другой LAN-порт; в `flash.log` видно состояние
-  TFTP-сервера. Сторонние брандмауэры (не Windows) нужно открыть для UDP 69.
-* **Ошибка до шага «Разметка UBI 2.0»** — во флеш ничего не записано, сток
-  загрузится как обычно, можно запускать заново.
-* **Ошибка после разметки, до записи загрузчика** — сток уже стёрт, но
-  вендорский загрузчик цел: просто запустите скрипт ещё раз (он снимет
-  «копию» уже размеченного флеша в новую папку — первую копию не трогает).
-* **OpenWrt не загрузился после записи загрузчика** — `serial.log`. С
-  http-uboot роутер сам уйдёт в веб-рекавери, если не найдёт `fit`.
+* **"the stock U-Boot never showed up on the console"** — check the COM port,
+  GND, TX/RX (often swapped), and that the adapter is 3.3 V.
+* **"could not stop the boot"** — the script asks you to cycle power and tries again.
+* **TFTP fails** — move the cable to another LAN port; `flash.log` shows the TFTP
+  server state. Third-party firewalls (not Windows Firewall) need UDP 69 open.
+* **An error before the "UBI 2.0 layout" step** — nothing was written to flash,
+  the stock firmware boots as usual, just run the script again.
+* **An error after the layout, before the loader was written** — the stock firmware
+  is already erased, but the vendor loader is intact: run
+  `-Mode Loader -Loader <your choice>` to finish.
+* **OpenWrt did not boot after the loader was written** — see `serial.log`. With
+  http-uboot the router goes into web recovery by itself if it finds no `fit`.
 
-Ручной путь, по которому идёт скрипт, — команды стокового загрузчика из
-[инструкции OpenWrt](https://github.com/openwrt/openwrt/pull/22397):
+The manual path the script follows — stock loader commands from the
+[OpenWrt instructions](https://github.com/openwrt/openwrt/pull/22397):
 
 ```
 setenv serverip 192.168.1.10 ; setenv ipaddr 192.168.1.1
@@ -240,67 +251,69 @@ flash write 0x600000 0x100000 0x89000000
 reset
 ```
 
-## Файлы
+## Files
 
-| Файл | Откуда | sha256 |
+| File | Source | sha256 |
 |---|---|---|
-| `xr1710g-flash.ps1`, `xr1710g-flash.cmd` | этот репозиторий | |
-| `router/install-ubi.sh` | этот репозиторий; порядок и размеры томов, сборка `factory` — из `install.sh` [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer/blob/46df1f5282f53c6757752354d7b6702f6fa54ec5/files/installer/install.sh) | |
-| `firmware/xr1710g-chainloader-slot.bin` | [YYH2913/http-uboot, релиз `xr1710g_260805`](https://github.com/YYH2913/http-uboot/releases/tag/xr1710g_260805) | `deaefed3…d27be30` |
-| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r2`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r2) (коммит `ce11b1a79a`) | `1425540d…5dd3d9` |
-| `firmware/openwrt-…-initramfs-recovery.itb` | там же | `51acb98d…eedf3b` |
-| `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `23ef354d…84523f` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `dbf1b9f1…005758` |
+| `xr1710g-flash.ps1`, `xr1710g-flash.cmd` | this repository | |
+| `router/install-ubi.sh` | this repository; volume order and sizes and the `factory` build come from `install.sh` in [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer/blob/46df1f5282f53c6757752354d7b6702f6fa54ec5/files/installer/install.sh) | |
+| `firmware/xr1710g-chainloader-slot.bin` | [YYH2913/http-uboot, release `xr1710g_260805`](https://github.com/YYH2913/http-uboot/releases/tag/xr1710g_260805) | `deaefed3…d27be30` |
+| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, release `xr1710g-r2`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r2) (commit `ce11b1a79a`) | `1425540d…5dd3d9` |
+| `firmware/openwrt-…-initramfs-recovery.itb` | same | `51acb98d…eedf3b` |
+| `firmware/openwrt-…-squashfs-sysupgrade.itb` | same | `23ef354d…84523f` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` from `initramfs-recovery.itb` | `dbf1b9f1…005758` |
 
-Полные суммы — в `firmware/SHA256SUMS`, скрипт сверяет их при каждом запуске.
+Full sums are in `firmware/SHA256SUMS`; the script checks them on every run.
 
-Сборка OpenWrt `xr1710g-r2` — ветка `main-gemtek-xr1710g` (OpenWrt main,
-ядро 6.18.55, поддержка XR1710G на модели W1700K и исправления 10G-линков),
-на железе установлена и загружается (28.10.2026). Через `-Firmware`
-можно поставить любую другую сборку под `gemtek,xr1710g-ubi` с UBI 2.0.
+The OpenWrt build `xr1710g-r2` comes from the `main-gemtek-xr1710g` branch
+(OpenWrt main, kernel 6.18.55, XR1710G support modelled on the W1700K plus 10G
+link fixes); it is installed and boots on hardware (2026-10-28). With `-Firmware`
+you can install any other build for `gemtek,xr1710g-ubi` with UBI 2.0.
 
-## Источники и авторство
+## Sources and credits
 
-* **Способ установки через чейнлоадер** (слот 0x600000, `flash write`
-  стокового загрузчика, `bootcmd` через `one`/`two`, вскрытие и распиновка
-  UART) — коммит OpenWrt «airoha: add support for Gemtek W1700K»,
-  Andrew LaMarche, в OpenWrt внесён Christian Marangi:
+* **The chainloader install method** (slot 0x600000, the stock loader's
+  `flash write`, `bootcmd` via `one`/`two`, opening the case and the UART pinout) —
+  the OpenWrt commit "airoha: add support for Gemtek W1700K" by Andrew LaMarche,
+  merged into OpenWrt by Christian Marangi:
   [openwrt/openwrt#17869, 9930758](https://github.com/openwrt/openwrt/pull/17869/changes/99307582dea256731a8006a734a41ac6f26be5b7).
-* **Поддержка XR1710G** и чейнлоадер для него — Kenneth Kasilag (hurrian),
+* **XR1710G support** and its chainloader — Kenneth Kasilag (hurrian),
   [openwrt/openwrt#22397](https://github.com/openwrt/openwrt/pull/22397);
-  на этом основана ветка `main-gemtek-xr1710g`, из которой собраны образы.
-* **Установщик UBI**: тома `ubootenv`/`ubootenv2`/`factory`/`recovery`/`fit`,
-  поиск EEPROM (магия 0x7990, little-endian — байты `90 79`, с 0x405000), поля DSD `wan_mac`, `lan_mac`,
-  `fan_id`, `serial_number` и раскладка тома `factory` —
+  the `main-gemtek-xr1710g` branch the images are built from is based on it.
+* **The UBI installer**: the `ubootenv`/`ubootenv2`/`factory`/`recovery`/`fit`
+  volumes, the EEPROM search (magic 0x7990, little-endian — bytes `90 79`, from
+  0x405000), the DSD fields `wan_mac`, `lan_mac`, `fan_id`, `serial_number` and
+  the `factory` volume layout —
   [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer)
-  (GPL-3.0), который в свою очередь основан на
+  (GPL-3.0), itself based on
   [dangowrt/owrt-ubi-installer](https://github.com/dangowrt/owrt-ubi-installer)
   (Daniel Golle).
-* **Разметка UBI 2.0** (`0x1b700000`, резерв 528 PEB), «двухвходовый» слот
-  (шим `27 05 19 56` на 0x600000, FIT на 0x602100), совместимые формы
-  `bootcmd`, HTTP-рекавери и загрузчик `xr1710g-chainloader-slot.bin` —
+* **The UBI 2.0 layout** (`0x1b700000`, 528 PEB reserve), the "dual-entry" slot
+  (shim `27 05 19 56` at 0x600000, FIT at 0x602100), the compatible `bootcmd`
+  forms, HTTP recovery and the `xr1710g-chainloader-slot.bin` loader —
   [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot).
-* Сам скрипт, TFTP-сервер, сборка `factory` на ПК, initramfs для копии,
-  режимы копии и восстановления, эмулятор для тестов — этот репозиторий
-  (Andrey Korshunov). Слот http-uboot ранее проверен на железе в
+* The script itself, the TFTP server, building `factory` on the PC, the backup
+  initramfs, the backup/restore/loader modes and the test emulator — this
+  repository (Andrey Korshunov). The http-uboot slot was verified on hardware
+  earlier in
   [akorshun/xr1710g-uboot-recovery](https://github.com/akorshun/xr1710g-uboot-recovery).
 
-## Лицензия
+## License
 
-Скрипты — GPL-3.0 (`LICENSE`): `router/install-ubi.sh` и сборка `factory`
-в `xr1710g-flash.ps1` повторяют логику GPL-3.0 установщика hurrian.
-Бинарные образы в `firmware/` распространяются на условиях их проектов
-(OpenWrt и U-Boot — GPL-2.0); исходный код — по ссылкам в таблице выше.
+The scripts are GPL-3.0 (`LICENSE`): `router/install-ubi.sh` and the `factory`
+build in `xr1710g-flash.ps1` follow the logic of hurrian's GPL-3.0 installer.
+The binary images in `firmware/` are distributed under their projects' terms
+(OpenWrt and U-Boot — GPL-2.0); the source code is linked in the table above.
 
-## Тесты
+## Tests
 
 ```powershell
-.\tests\run-fake.ps1          # сквозной прогон на эмуляторе: Backup, Install x2, Loader, Restore, отказ UBI 1.0
+.\tests\run-fake.ps1          # end-to-end emulator run: Backup (ru), Install x2, Loader, Restore, UBI 1.0 refusal
 ```
 
 ```sh
-sh tests/test-install-ubi.sh  # install-ubi.sh с заглушками ubi-utils
+sh tests/test-install-ubi.sh  # install-ubi.sh with stubbed ubi-utils
 python tools/make-backup-initramfs.py --check firmware/xr1710g-backup-initramfs.itb
 ```
 
-Всё это же запускает CI (`.github/workflows/check.yml`).
+CI runs all of these (`.github/workflows/check.yml`).

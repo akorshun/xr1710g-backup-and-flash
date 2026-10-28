@@ -44,11 +44,11 @@ New-Item -ItemType Directory -Force $Work | Out-Null
 $slot = [IO.File]::ReadAllBytes("$Root\firmware\xr1710g-chainloader-slot.bin")
 $owrt = [IO.File]::ReadAllBytes("$Root\firmware\openwrt-airoha-an7581-gemtek_xr1710g-ubi-chainload-uboot.itb")
 
-# 1. Backup only: nothing in the flash may change
+# 1. Backup only, Russian messages: nothing in the flash may change
 $s = "$Work\state-backup"
 $r = Start-Router $s 7001 -Init
 $before = (Get-FileHash "$s\mtd1.bin").Hash
-$rc = Invoke-Flash 'backup' $s 7001 @('-Mode', 'Backup', '-BackupDir', "$Work\bk1")
+$rc = Invoke-Flash 'backup' $s 7001 @('-Mode', 'Backup', '-Lang', 'ru', '-BackupDir', "$Work\bk1")
 Check 'backup: exit code 0' ($rc -eq 0)
 Check 'backup: four partition dumps' (@(Get-ChildItem "$Work\bk1\mtd*.bin").Count -eq 4)
 Check 'backup: dumps equal the flash' ((Get-FileHash "$Work\bk1\mtd0-vendor.bin").Hash -eq (Get-FileHash "$s\mtd0.bin").Hash)
@@ -56,6 +56,8 @@ Check 'backup: stock env saved' ((Get-Content "$Work\bk1\stock-uboot-env.txt") -
 Check 'backup: factory.bin built' ((Get-Item "$Work\bk1\factory.bin").Length -eq 0x10000)
 Check 'backup: slot untouched' ((Get-FileHash "$s\mtd1.bin").Hash -eq $before)
 Check 'backup: env untouched' ((Get-Env $s).bootcmd -eq 'flash read 0x602100 0x4000000 $loadaddr; bootm')
+# "Kopiya stoka" (Stock backup) in Cyrillic, escaped: this file has no BOM and PowerShell 5.1 would misread it
+Check 'backup: Russian messages' ((Get-Content "$Work\bk1\flash.log" -Raw -Encoding UTF8) -match '\u041a\u043e\u043f\u0438\u044f \u0441\u0442\u043e\u043a\u0430')
 Stop-Process $r -ErrorAction SilentlyContinue
 
 # 2. Install with http-uboot: stock bootcmd stays, slot = slot.bin
@@ -66,6 +68,7 @@ Check 'http: exit code 0' ($rc -eq 0)
 Check 'http: slot written' (@(Compare-Object (Get-Head "$s\mtd1.bin" 0 $slot.Length) $slot -SyncWindow 0).Count -eq 0)
 Check 'http: bootcmd unchanged' ((Get-Env $s).bootcmd -eq 'flash read 0x602100 0x4000000 $loadaddr; bootm')
 Check 'http: OpenWrt installed' (Test-Path "$s\installed")
+Check 'http: English messages' ((Get-Content "$Work\bk2\flash.log" -Raw -Encoding UTF8) -match 'Stock backup saved')
 Stop-Process $r -ErrorAction SilentlyContinue
 
 # 3. Install with the OpenWrt chainloader: bootcmd switched to 0x600000
