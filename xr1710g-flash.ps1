@@ -437,6 +437,12 @@ function Test-Sysupgrade([string]$path) {
 $script:NetUndo = $null
 $script:FwRule = $null
 
+function Invoke-Netsh([string]$netshArgs, [switch]$NoFail) {
+    $out = cmd.exe /c "netsh $netshArgs 2>&1"
+    Write-Log "netsh $netshArgs (rc=$LASTEXITCODE)`n$out"
+    if ($LASTEXITCODE -ne 0 -and -not $NoFail) { Fail "netsh $netshArgs : $out" }
+}
+
 function Initialize-Network {
     $have = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $PcIp }
     if ($have) {
@@ -463,8 +469,13 @@ function Initialize-Network {
         }
         $ipif = Get-NetIPInterface -InterfaceIndex $nic.ifIndex -AddressFamily IPv4
         $script:NetUndo = @{ Index = $nic.ifIndex; Dhcp = [string]$ipif.Dhcp }
-        if ($ipif.Dhcp -eq 'Enabled') { Set-NetIPInterface -InterfaceIndex $nic.ifIndex -Dhcp Disabled }
-        New-NetIPAddress -InterfaceIndex $nic.ifIndex -IPAddress $PcIp -PrefixLength 24 | Out-Null
+        # netsh, а не New-NetIPAddress: тот отказывает ("Inconsistent parameters PolicyStore
+        # PersistentStore and Dhcp Enabled"), если DHCP выключен только в одном из хранилищ.
+        if ($ipif.Dhcp -eq 'Enabled') {
+            Invoke-Netsh "interface ipv4 set address name=$($nic.ifIndex) source=static address=$PcIp mask=255.255.255.0"
+        } else {
+            Invoke-Netsh "interface ipv4 add address name=$($nic.ifIndex) address=$PcIp mask=255.255.255.0"
+        }
         Info "адрес $PcIp/24 задан на '$($nic.Name)'"
     }
     $name = 'XR1710G flash TFTP (temporary)'
@@ -483,8 +494,11 @@ function Restore-Network {
     if ($script:NetUndo) {
         $u = $script:NetUndo
         $script:NetUndo = $null
-        Remove-NetIPAddress -InterfaceIndex $u.Index -IPAddress $PcIp -Confirm:$false -ErrorAction SilentlyContinue
-        if ($u.Dhcp -eq 'Enabled') { Set-NetIPInterface -InterfaceIndex $u.Index -Dhcp Enabled }
+        if ($u.Dhcp -eq 'Enabled') {
+            Invoke-Netsh "interface ipv4 set address name=$($u.Index) source=dhcp" -NoFail
+        } else {
+            Invoke-Netsh "interface ipv4 delete address name=$($u.Index) address=$PcIp" -NoFail
+        }
         Info 'настройки сетевого адаптера возвращены'
     }
 }
