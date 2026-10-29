@@ -783,13 +783,23 @@ function Save-Flash([string]$dir) {
     Say (T "Backing up the whole flash to $dir" "Снимаю копию всего флеша в $dir")
     $info = (Invoke-Ssh ('cat /proc/mtd; echo; cat /tmp/sysinfo/board_name; uname -a; ' +
         'for m in /sys/class/mtd/mtd[0-9]*; do [ -e $m/name ] && echo "$(basename $m) $(cat $m/name) bad_blocks=$(cat $m/bad_blocks 2>/dev/null) ecc_failures=$(cat $m/ecc_failures 2>/dev/null)"; done; ' +
-        '[ -e /sys/class/ubi/ubi0 ] && echo XR_UBI_ATTACHED; dmesg | grep -i -E "spi-nand|nand|mtd|ubi" | head -50')).Out
+        '[ -e /sys/class/ubi/ubi0 ] && echo XR_UBI_ATTACHED; for v in /sys/class/ubi/ubi0_*/name; do [ -e $v ] && echo "XR_UBI_VOL $(cat $v)"; done; ' +
+        'dmesg | grep -i -E "spi-nand|nand|mtd|ubi" | head -50')).Out
     Set-Content -LiteralPath (Join-Path $dir 'router-info.txt') -Value $info -Encoding UTF8
     if ($info -notmatch 'gemtek,xr1710g') { Fail ((T 'the initramfs reports a wrong board_name:' 'initramfs сообщает не тот board_name:') + "`n$info") }
+    $flashed = $false
     if ($info -match 'XR_UBI_ATTACHED') {
-        # The OpenWrt kernel attaches the "ubi" partition by itself when it starts with UBI# -
-        # on stock it holds a tclinux bank, so the router has been flashed before.
-        Warn (T 'the ubi area already holds UBI and the kernel attached it - the router was flashed before, this is NOT a stock backup' 'в области ubi уже есть UBI и ядро его подключило - роутер прошивался раньше, это копия НЕ стока')
+        # The OpenWrt kernel attaches the "ubi" partition by itself when it starts with UBI#.
+        # The stock firmware (5.1.1.12) keeps its own UBI there (rootfs_data, config, log);
+        # only OpenWrt's volumes mean the router was flashed before.
+        $vols = @([regex]::Matches($info, '(?m)^XR_UBI_VOL (\S+)') | ForEach-Object { $_.Groups[1].Value })
+        $owrt = @($vols | Where-Object { $_ -in 'ubootenv', 'ubootenv2', 'factory', 'recovery', 'fit', 'kernel', 'rootfs' })
+        if ($owrt.Count -gt 0) {
+            $flashed = $true
+            Warn ((T 'the ubi area holds OpenWrt UBI volumes ({0}) - the router was flashed before, this is NOT a stock backup' 'в области ubi лежат тома UBI от OpenWrt ({0}) - роутер прошивался раньше, это копия НЕ стока') -f ($owrt -join ', '))
+        } else {
+            Info ((T 'the ubi area holds the stock firmware UBI (volumes: {0}) - it goes into the backup as is' 'в области ubi - UBI стоковой прошивки (тома: {0}), он войдёт в копию как есть') -f ($vols -join ', '))
+        }
         Dismount-Ubi
     }
     Test-MtdLayout $info
@@ -812,11 +822,8 @@ function Save-Flash([string]$dir) {
         Info "  ok, sha256 $local"
     }
     Set-Content -LiteralPath (Join-Path $dir 'SHA256SUMS') -Value $sums -Encoding ASCII
-    $head = [byte[]]::new(4)
-    $fs = [IO.File]::OpenRead((Join-Path $dir 'mtd2-ubi.bin'))
-    try { $fs.Read($head, 0, 4) | Out-Null } finally { $fs.Close() }
-    if ([Text.Encoding]::ASCII.GetString($head) -eq 'UBI#') {
-        Warn (T 'the ubi area already holds UBI - the router was flashed before, this is NOT a stock backup. Keep an earlier backup if you have one.' 'в области ubi уже лежит UBI - роутер прошивался раньше, это копия НЕ стока. Сохраните более раннюю копию, если она есть.')
+    if ($flashed) {
+        Warn (T 'the router was flashed before, this is NOT a stock backup. Keep an earlier backup if you have one.' 'роутер прошивался раньше, это копия НЕ стока. Сохраните более раннюю копию, если она есть.')
     }
 }
 

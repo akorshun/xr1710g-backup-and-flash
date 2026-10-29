@@ -131,9 +131,12 @@ OpenWrt build with two changes in its DTB (see `tools/make-backup-initramfs.py`;
   hardware run. Without them the MACs are random.
 
 Also, the OpenWrt kernel attaches a partition named `ubi` by itself when it
-starts with `UBI#` (patch 490). On stock it holds a `tclinux` bank and this does
-not happen. If the router was flashed before, the script warns that the backup
-is not stock and detaches UBI (`ubidetach`) before the backup and before a restore.
+starts with `UBI#` (patch 490). The stock firmware (`XR1710G_fw_5.1.1.12`) keeps
+its own UBI there too, with the volumes `rootfs_data`, `config` and `log` (its
+settings and syslog), so an attached UBI alone does not mean an earlier flash. The
+script looks at the volume names: only OpenWrt's (`ubootenv`, `factory`, `fit`,
+`recovery`…) make it warn that the backup is not stock. In both cases it detaches
+UBI (`ubidetach`) before the backup and before a restore.
 
 The stock `bootcmd` varies: the http-uboot README gives
 `flash read 0x602100 0x4000000 $loadaddr; bootm`, while one of our XR1710G units
@@ -319,7 +322,7 @@ The binary images in `firmware/` are distributed under their projects' terms
 ## Tests
 
 ```powershell
-.\tests\run-fake.ps1          # end-to-end emulator run: Backup (ru), Install x2, Loader, Restore, UBI 1.0 refusal
+.\tests\run-fake.ps1          # end-to-end emulator run: Backup (ru, stock UBI), Install x2, Backup of a flashed router, Loader, Restore, UBI 1.0 refusal
 ```
 
 ```sh

@@ -58,6 +58,11 @@ Check 'backup: slot untouched' ((Get-FileHash "$s\mtd1.bin").Hash -eq $before)
 Check 'backup: env untouched' ((Get-Env $s).bootcmd -eq 'flash read 0x602100 0x4000000 $loadaddr; bootm')
 # "Kopiya stoka" (Stock backup) in Cyrillic, escaped: this file has no BOM and PowerShell 5.1 would misread it
 Check 'backup: Russian messages' ((Get-Content "$Work\bk1\flash.log" -Raw -Encoding UTF8) -match '\u041a\u043e\u043f\u0438\u044f \u0441\u0442\u043e\u043a\u0430')
+# the stock UBI (rootfs_data, config, log) is not taken for an earlier flash
+$log = Get-Content "$Work\bk1\flash.log" -Raw -Encoding UTF8
+Check 'backup: stock UBI recognised' ($log -match 'rootfs_data, config, log')
+Check 'backup: no "flashed before" warning' ($log -notmatch '\u041d\u0415 \u0441\u0442\u043e\u043a\u0430')
+Check 'backup: stock UBI detached before the dump' ($log -match 'ubidetach -m 2')
 Stop-Process $r -ErrorAction SilentlyContinue
 
 # 2. Install with http-uboot: stock bootcmd stays, slot = slot.bin
@@ -78,6 +83,13 @@ $rc = Invoke-Flash 'install openwrt' $s 7003 @('-Loader', 'openwrt', '-BackupDir
 Check 'openwrt: exit code 0' ($rc -eq 0)
 Check 'openwrt: slot written' (@(Compare-Object (Get-Head "$s\mtd1.bin" 0 $owrt.Length) $owrt -SyncWindow 0).Count -eq 0)
 Check 'openwrt: bootcmd' ((Get-Env $s).bootcmd -eq 'flash read 0x600000 0x100000 $loadaddr; bootm')
+Stop-Process $r -ErrorAction SilentlyContinue
+
+# 3b. Backup of the router flashed in test 3: OpenWrt volumes mean "not stock"
+$r = Start-Router $s 7007
+$rc = Invoke-Flash 'backup flashed' $s 7007 @('-Mode', 'Backup', '-BackupDir', "$Work\bk7")
+Check 'flashed: exit code 0' ($rc -eq 0)
+Check 'flashed: "not stock" warning' ((Get-Content "$Work\bk7\flash.log" -Raw) -match 'OpenWrt UBI volumes \(ubootenv, ubootenv2, factory, recovery, fit\)')
 Stop-Process $r -ErrorAction SilentlyContinue
 
 # 4. Loader only: switch the router of test 2 from http-uboot to the OpenWrt loader

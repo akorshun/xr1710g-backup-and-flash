@@ -47,7 +47,8 @@ def init_state():
     open(path("mtd0.bin"), "wb").write(v)
     open(path("mtd1.bin"), "wb").write(b"\x27\x05\x19\x56STOCK" + rnd.randbytes(0x100000 - 9))
     with open(path("mtd2.bin"), "wb") as f:
-        f.write(rnd.randbytes(1 << 20))
+        # the stock firmware 5.1.1.12 keeps its own UBI here
+        f.write(b"UBI#" + bytes(60) + b"VOLS:rootfs_data,config,log\0" + rnd.randbytes(1 << 20))
         f.truncate(0x1B700000)
     with open(path("mtd3.bin"), "wb") as f:
         f.truncate(0x4200000)

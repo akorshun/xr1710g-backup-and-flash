@@ -62,9 +62,13 @@ elif cmd.startswith("cat /proc/mtd"):
         for i, (n, s) in enumerate(MTD):
             print("mtd%d %s bad_blocks=0 ecc_failures=0" % (i, n))
         # like OpenWrt's 490 patch: "ubi" is auto-attached if it starts with UBI#
-        if (open(path("mtd2.bin"), "rb").read(4) == b"UBI#"
-                and not os.path.exists(path("detached"))):
+        head = open(path("mtd2.bin"), "rb").read(256)
+        if head[:4] == b"UBI#" and not os.path.exists(path("detached")):
             print("XR_UBI_ATTACHED")
+            # volume names: "VOLS:a,b,c\0" after the fake EC header
+            if head[64:69] == b"VOLS:":
+                for v in head[69:head.index(b"\0", 69)].decode().split(","):
+                    print("XR_UBI_VOL " + v)
         print("[    1.0] spi-nand spi0.0: Winbond SPI NAND was found.")
 elif re.fullmatch(r"cat /dev/mtd\d", cmd):
     with open(path(cmd[9:] + ".bin"), "rb") as f:
@@ -91,7 +95,7 @@ elif cmd.startswith("sh /tmp/xr/install-ubi.sh "):
     assert fac[0x6000:0x6006] == bytes.fromhex("021122334451"), "bad LAN MAC"
     assert fac[0x8000:0x8000 + 17] == b"XR1710G0123456789", "bad serial"
     with open(path("mtd2.bin"), "r+b") as f:
-        f.write(b"UBI#" + bytes(60))
+        f.write(b"UBI#" + bytes(60) + b"VOLS:ubootenv,ubootenv2,factory,recovery,fit,rootfs_data\0")
     open(path("installed"), "w").write(sha(tmpfile(files[2])))
     print("[xr1710g] ubiformat /dev/mtd2 (439 MiB)\n[xr1710g] read-back check")
     print("XR_INSTALL_OK")
