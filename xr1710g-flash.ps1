@@ -58,7 +58,7 @@ param(
     [string]$ComPort = '',
     [string]$Firmware = '',
     [string]$BackupDir = '',
-    [string]$PcIp = '192.168.1.10',
+    [string]$PcIp = '192.168.1.254',
     [string]$UbootIp = '192.168.1.2',
     [string]$RouterIp = '192.168.1.1',
     [switch]$SkipNetworkSetup,
@@ -974,7 +974,7 @@ function Complete-Loader([string]$kind) {
     if ($kind -eq 'http') {
         Info (T 'Recovery: cable in the 10GbE port, hold reset at power-on -> http://192.168.255.1' 'Рекавери: кабель в порт 10GbE, держать reset при включении -> http://192.168.255.1')
     } else {
-        Info (T 'Recovery: reset 1-2 s after power-on, hold until the blue LED -> TFTP 192.168.1.10, file initramfs-recovery.itb' 'Рекавери: reset через 1-2 с после включения, держать до синего индикатора -> TFTP 192.168.1.10, файл initramfs-recovery.itb')
+        Info (T 'Recovery: reset 1-2 s after power-on, hold until the blue LED -> TFTP 192.168.1.254, file initramfs-recovery.itb' 'Рекавери: reset через 1-2 с после включения, держать до синего индикатора -> TFTP 192.168.1.254, файл initramfs-recovery.itb')
     }
 }
 
@@ -1016,7 +1016,7 @@ function Select-Loader {
 
   [2] U-Boot OpenWrt (uboot-airoha, an7581_gemtek_xr1710g) - "ванильный"
       + рекавери без UART: reset через 1-2 с после включения, держать до синего
-        индикатора (15-20 с) - грузит initramfs-recovery по TFTP с 192.168.1.10
+        индикатора (15-20 с) - грузит initramfs-recovery по TFTP с 192.168.1.254
       + если система в UBI не грузится, сам стартует recovery из флеша
       + меню загрузки в UART: TFTP, recovery из флеша, установщик по TFTP
       - нет веб-страницы: нужен свой TFTP-сервер на ПК
@@ -1039,7 +1039,7 @@ Which loader goes into the chainloader slot?
 
   [2] OpenWrt U-Boot (uboot-airoha, an7581_gemtek_xr1710g) - "vanilla"
       + recovery without UART: press reset 1-2 s after power-on, hold until the
-        blue LED (15-20 s) - loads initramfs-recovery over TFTP from 192.168.1.10
+        blue LED (15-20 s) - loads initramfs-recovery over TFTP from 192.168.1.254
       + if the system in UBI does not boot, it starts recovery from flash itself
       + boot menu on the UART: TFTP, recovery from flash, TFTP installer
       - no web page: needs your own TFTP server on the PC

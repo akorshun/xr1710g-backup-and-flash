@@ -21,7 +21,7 @@ skips the question).
 > **Verified on hardware (XR1710G, 2026-10-28):** stock backup, UBI 2.0 layout,
 > OpenWrt `xr1710g-r2` install and the OpenWrt loader (`-Loader openwrt`) — the
 > router boots OpenWrt, Ethernet and Wi-Fi (EEPROM from the factory volume) work.
-> `firmware/` now carries the newer `xr1710g-r7` build; its reset-button TFTP
+> `firmware/` now carries the newer `xr1710g-r8` build; its reset-button TFTP
 > recovery has not been run through the script on hardware yet.
 > The http-uboot loader (`-Loader http`) and Restore mode are so far covered only
 > by the emulator (`tests/`). The stock backup is taken first, the vendor loader
@@ -50,7 +50,7 @@ skips the question).
    loader's network driver is flaky: if TFTP fails the script retries, and you can
    move the cable to another port while it does.
 
-The script sets `192.168.1.10/24` on that adapter itself (and puts DHCP back at
+The script sets `192.168.1.254/24` on that adapter itself (and puts DHCP back at
 the end), as well as a temporary firewall rule for TFTP (UDP 69).
 
 ## Which loader to choose
@@ -63,12 +63,12 @@ there; both work with the UBI 2.0 layout.
 |---|---|---|
 | Version | U-Boot 2026.07, third-party build | U-Boot 2026.07 from OpenWrt, own XR1710G configuration (reset button, LEDs) |
 | Recovery | web page at `http://192.168.255.1` with its own DHCP; upload `sysupgrade.itb` and the loader itself from a browser | reset button: `initramfs-recovery.itb` over TFTP from a server on the PC, retried until it answers; a `fit` that does not boot falls back to the `recovery` volume; UART menu: TFTP, recovery from flash, TFTP installer |
-| How to enter recovery | cable in the **10GbE** port, hold **reset** at power-on, release when the LED goes from red to "running" | PC `192.168.1.10/24` with a TFTP server in a LAN port; power on, press **reset 1–2 s later** (held at power-on the SoC waits for a UART download) and hold it until the **blue** LED, about 15–20 s |
+| How to enter recovery | cable in the **10GbE** port, hold **reset** at power-on, release when the LED goes from red to "running" | PC `192.168.1.254/24` with a TFTP server in a LAN port; power on, press **reset 1–2 s later** (held at power-on the SoC waits for a UART download) and hold it until the **blue** LED, about 15–20 s |
 | UART needed after install | no | no (a TFTP server is needed instead of a browser) |
 | Network in the loader | 10GbE | gigabit ports |
 | UBI rebuild | from the web UI, with a choice of 2.0 / 1.5 / 1.0 layout and factory restored from DSD | by hand from an initramfs |
 | AXON environment | unchanged: the slot is "dual-entry" and works with the stock `bootcmd` | `bootcmd` becomes `flash read 0x600000 0x100000 $loadaddr; bootm` (as in the OpenWrt instructions) |
-| Origin | binary from the author's release, sources in [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | built from [akorshun/openwrt `xr1710g-r7`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r7) |
+| Origin | binary from the author's release, sources in [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | built from [akorshun/openwrt `xr1710g-r8`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r8) |
 
 Both boot OpenWrt from the `fit` volume; updates are a plain `sysupgrade`. If in
 doubt, take **http-uboot**: its recovery needs only a browser.
@@ -221,17 +221,20 @@ http-uboot web recovery pick **UBI 2.0** for such images.
   start the 6 GHz AP on our unit.
 * http-uboot recovery: PC in the 10GbE port with DHCP, reset at power-on,
   `http://192.168.255.1`, target `firmware`, layout `UBI 2.0`.
-* OpenWrt U-Boot recovery: PC `192.168.1.10/24` in a LAN port, a TFTP server
+* OpenWrt U-Boot recovery: PC `192.168.1.254/24` in a LAN port, a TFTP server
   serving `openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb`;
   power on, press reset 1–2 s later and hold it until the blue LED (15–20 s).
   The recovery system comes up at `192.168.1.1`, sysupgrade from there. If the
   `fit` volume does not boot, the loader starts the `recovery` volume by itself.
   Over the UART the same is in the loader menu ("Boot system via TFTP",
   "Boot recovery system from flash").
+  The loader from `xr1710g-r5` … `r7` (written by earlier versions of this
+  script) looks for the TFTP server at `192.168.1.10` instead: give the PC that
+  address, or put the r8 loader in with `-Mode Loader -Loader openwrt`.
 * Coming from `xr1710g-r2` … `r4`: those set the compat version to 2.0, which
   later builds dropped, so sysupgrade refuses them. First run
   `uci set system.@system[0].compat_version=1.0 && uci commit system`. The
-  chainloader is not updated by sysupgrade: to get the r7 loader with the
+  chainloader is not updated by sysupgrade: to get the r8 loader with the
   button recovery, run `-Mode Loader -Loader openwrt`.
 
 ## If something goes wrong
@@ -253,7 +256,7 @@ The manual path the script follows — stock loader commands from the
 [OpenWrt instructions](https://github.com/openwrt/openwrt/pull/22397):
 
 ```
-setenv serverip 192.168.1.10 ; setenv ipaddr 192.168.1.1
+setenv serverip 192.168.1.254 ; setenv ipaddr 192.168.1.1
 tftpboot 0x89000000 openwrt-airoha-an7581-gemtek_xr1710g-ubi-chainload-uboot.itb
 setenv one flash read 0x600000 0x100000 \$loadaddr
 setenv two "; bootm"
@@ -271,14 +274,14 @@ reset
 | `xr1710g-flash.ps1`, `xr1710g-flash.cmd` | this repository | |
 | `router/install-ubi.sh` | this repository; volume order and sizes and the `factory` build come from `install.sh` in [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer/blob/46df1f5282f53c6757752354d7b6702f6fa54ec5/files/installer/install.sh) | |
 | `firmware/xr1710g-chainloader-slot.bin` | [YYH2913/http-uboot, release `xr1710g_260805`](https://github.com/YYH2913/http-uboot/releases/tag/xr1710g_260805) | `deaefed3…d27be30` |
-| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, release `xr1710g-r7`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r7) (commit `e80747b5a1`) | `0876dbc4…dd98fb` |
-| `firmware/openwrt-…-initramfs-recovery.itb` | same | `59f70f51…ff57633` |
-| `firmware/openwrt-…-squashfs-sysupgrade.itb` | same | `8e334f60…bed9f88` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` from `initramfs-recovery.itb` | `23439747…682dd3` |
+| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, release `xr1710g-r8`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r8) (commit `c2235765d1`) | `85ed1978…c21ca4` |
+| `firmware/openwrt-…-initramfs-recovery.itb` | same | `e984690c…440b5d64` |
+| `firmware/openwrt-…-squashfs-sysupgrade.itb` | same | `fd3e1bbe…6c7a41` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` from `initramfs-recovery.itb` | `cf32aee4…4e080` |
 
 Full sums are in `firmware/SHA256SUMS`; the script checks them on every run.
 
-The OpenWrt build `xr1710g-r7` comes from the `main-gemtek-xr1710g` branch
+The OpenWrt build `xr1710g-r8` comes from the `main-gemtek-xr1710g` branch
 (OpenWrt main, kernel 6.18.55, XR1710G support modelled on the W1700K plus 10G
 link fixes, U-Boot 2026.07 with its own XR1710G configuration); `xr1710g-r2` from
 the same branch was installed by the script and boots on hardware (2026-10-28). With `-Firmware`
