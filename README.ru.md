@@ -21,7 +21,8 @@
 > **Проверено на железе (XR1710G, 28.10.2026):** копия стока, разметка UBI 2.0,
 > установка OpenWrt `xr1710g-r2` и загрузчик OpenWrt (`-Loader openwrt`) —
 > роутер загружается в OpenWrt, Ethernet и Wi-Fi (EEPROM из тома factory)
-> работают. Загрузчик http-uboot (`-Loader http`) и режим Restore пока
+> работают. Сейчас в `firmware/` лежит более новая сборка `xr1710g-r7`; её
+> рекавери по кнопке через TFTP скриптом на железе ещё не прогонялось. Загрузчик http-uboot (`-Loader http`) и режим Restore пока
 > проверены только на эмуляторе (`tests/`). Копия стока снимается первой,
 > вендорский загрузчик (0x0–0x600000) не трогается никогда, а UART остаётся
 > рабочим способом восстановления.
@@ -59,18 +60,18 @@
 
 | | **http-uboot** (YYH2913, `xr1710g_260805`) — по умолчанию | **U-Boot OpenWrt** (`uboot-airoha`, ванильный) |
 |---|---|---|
-| Версия | U-Boot 2026.07, сторонняя сборка | U-Boot 2026.01 из OpenWrt, конфигурация Gemtek W1700K |
-| Рекавери | веб-страница `http://192.168.255.1`, свой DHCP; заливка `sysupgrade.itb` и самого загрузчика из браузера | меню в UART: TFTP, recovery из флеша, установщик по TFTP |
-| Как войти в рекавери | кабель в порт **10GbE**, держать **reset** при включении, отпустить, когда индикатор сменит красный на «бегущий» | только UART (USB-UART + TFTP-сервер на ПК) |
-| Нужен ли UART после установки | нет | да, для любого восстановления |
+| Версия | U-Boot 2026.07, сторонняя сборка | U-Boot 2026.07 из OpenWrt, своя конфигурация XR1710G (кнопка reset, индикаторы) |
+| Рекавери | веб-страница `http://192.168.255.1`, свой DHCP; заливка `sysupgrade.itb` и самого загрузчика из браузера | кнопка reset: `initramfs-recovery.itb` по TFTP с сервера на ПК, с повтором, пока тот не ответит; если `fit` не грузится — сам стартует том `recovery`; меню в UART: TFTP, recovery из флеша, установщик по TFTP |
+| Как войти в рекавери | кабель в порт **10GbE**, держать **reset** при включении, отпустить, когда индикатор сменит красный на «бегущий» | ПК `192.168.1.10/24` с TFTP-сервером в порту LAN; включить, нажать **reset через 1–2 с** (если держать при включении, SoC ждёт загрузку по UART) и держать до **синего** индикатора, около 15–20 с |
+| Нужен ли UART после установки | нет | нет (вместо браузера нужен TFTP-сервер) |
 | Сеть в загрузчике | 10GbE | гигабитные порты |
 | Пересоздание UBI | из веб-интерфейса, с выбором раскладки 2.0 / 1.5 / 1.0 и восстановлением factory из DSD | вручную из initramfs |
 | Окружение AXON | не меняется: слот «двухвходовый», работает со стоковым `bootcmd` | `bootcmd` меняется на `flash read 0x600000 0x100000 $loadaddr; bootm` (как в инструкции OpenWrt) |
-| Происхождение | бинарник из релиза автора, исходники в [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | собран из [akorshun/openwrt `xr1710g-r2`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r2) |
+| Происхождение | бинарник из релиза автора, исходники в [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | собран из [akorshun/openwrt `xr1710g-r7`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r7) |
 
 Оба варианта загружают OpenWrt из тома `fit`, обновления ставятся обычным
-`sysupgrade`. Если сомневаетесь — берите **http-uboot**: без UART его можно
-восстановить из браузера. Сменить загрузчик позже можно его же веб-страницей
+`sysupgrade`. Если сомневаетесь — берите **http-uboot**: для его рекавери
+нужен только браузер. Сменить загрузчик позже можно его же веб-страницей
 (http-uboot) или режимом `-Mode Loader`.
 
 ## Запуск
@@ -214,10 +215,18 @@ fan_id @0x7000, серийный номер @0x8000), `3 recovery` (initramfs Op
   на нашем роутере не поднималась.
 * Рекавери http-uboot: ПК в порт 10GbE с DHCP, reset при включении,
   `http://192.168.255.1`, цель `firmware`, раскладка `UBI 2.0`.
-* Рекавери U-Boot OpenWrt: UART, меню загрузчика, «Boot system via TFTP»
-  (ПК `192.168.1.10`, файл
-  `openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb`) или
-  «Boot recovery system from flash».
+* Рекавери U-Boot OpenWrt: ПК `192.168.1.10/24` в порту LAN, TFTP-сервер
+  отдаёт `openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb`;
+  включить роутер, через 1–2 с нажать reset и держать до синего индикатора
+  (15–20 с). Система рекавери поднимается на `192.168.1.1`, оттуда sysupgrade.
+  Если том `fit` не грузится, загрузчик сам стартует том `recovery`. Через UART
+  то же есть в меню загрузчика («Boot system via TFTP», «Boot recovery system
+  from flash»).
+* Переход с `xr1710g-r2` … `r4`: они ставили compat version 2.0, от которой
+  потом отказались, и sysupgrade новых сборок отказывается. Сначала
+  `uci set system.@system[0].compat_version=1.0 && uci commit system`.
+  Chainloader sysupgrade не обновляет: чтобы получить загрузчик r7 с рекавери
+  по кнопке, запустите `-Mode Loader -Loader openwrt`.
 
 ## Если что-то пошло не так
 
@@ -257,16 +266,17 @@ reset
 | `xr1710g-flash.ps1`, `xr1710g-flash.cmd` | этот репозиторий | |
 | `router/install-ubi.sh` | этот репозиторий; порядок и размеры томов, сборка `factory` — из `install.sh` [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer/blob/46df1f5282f53c6757752354d7b6702f6fa54ec5/files/installer/install.sh) | |
 | `firmware/xr1710g-chainloader-slot.bin` | [YYH2913/http-uboot, релиз `xr1710g_260805`](https://github.com/YYH2913/http-uboot/releases/tag/xr1710g_260805) | `deaefed3…d27be30` |
-| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r2`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r2) (коммит `ce11b1a79a`) | `1425540d…5dd3d9` |
-| `firmware/openwrt-…-initramfs-recovery.itb` | там же | `51acb98d…eedf3b` |
-| `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `23ef354d…84523f` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `dbf1b9f1…005758` |
+| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r7`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r7) (коммит `e80747b5a1`) | `0876dbc4…dd98fb` |
+| `firmware/openwrt-…-initramfs-recovery.itb` | там же | `59f70f51…ff57633` |
+| `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `8e334f60…bed9f88` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `23439747…682dd3` |
 
 Полные суммы — в `firmware/SHA256SUMS`, скрипт сверяет их при каждом запуске.
 
-Сборка OpenWrt `xr1710g-r2` — ветка `main-gemtek-xr1710g` (OpenWrt main,
-ядро 6.18.55, поддержка XR1710G на модели W1700K и исправления 10G-линков),
-на железе установлена и загружается (28.10.2026). Через `-Firmware`
+Сборка OpenWrt `xr1710g-r7` — ветка `main-gemtek-xr1710g` (OpenWrt main,
+ядро 6.18.55, поддержка XR1710G на модели W1700K и исправления 10G-линков,
+U-Boot 2026.07 со своей конфигурацией XR1710G); `xr1710g-r2` из той же ветки
+скриптом на железе установлена и загружается (28.10.2026). Через `-Firmware`
 можно поставить любую другую сборку под `gemtek,xr1710g-ubi` с UBI 2.0.
 
 ## Источники и авторство

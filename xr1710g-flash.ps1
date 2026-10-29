@@ -967,7 +967,7 @@ function Complete-Loader([string]$kind) {
     if ($kind -eq 'http') {
         Info (T 'Recovery: cable in the 10GbE port, hold reset at power-on -> http://192.168.255.1' 'Рекавери: кабель в порт 10GbE, держать reset при включении -> http://192.168.255.1')
     } else {
-        Info (T 'Recovery: U-Boot menu on the UART (TFTP / recovery from flash)' 'Рекавери: меню U-Boot в UART (TFTP / recovery из флеша)')
+        Info (T 'Recovery: reset 1-2 s after power-on, hold until the blue LED -> TFTP 192.168.1.10, file initramfs-recovery.itb' 'Рекавери: reset через 1-2 с после включения, держать до синего индикатора -> TFTP 192.168.1.10, файл initramfs-recovery.itb')
     }
 }
 
@@ -1008,9 +1008,11 @@ function Select-Loader {
       - сторонняя сборка (U-Boot 2026.07), исходники у автора
 
   [2] U-Boot OpenWrt (uboot-airoha, an7581_gemtek_xr1710g) - "ванильный"
-      + та же сборка, что у Gemtek W1700K в OpenWrt; меню загрузки в UART:
-        TFTP, recovery из флеша, установщик по TFTP
-      - любое восстановление - только через UART и TFTP
+      + рекавери без UART: reset через 1-2 с после включения, держать до синего
+        индикатора (15-20 с) - грузит initramfs-recovery по TFTP с 192.168.1.10
+      + если система в UBI не грузится, сам стартует recovery из флеша
+      + меню загрузки в UART: TFTP, recovery из флеша, установщик по TFTP
+      - нет веб-страницы: нужен свой TFTP-сервер на ПК
       - нужен bootcmd 'flash read 0x600000 0x100000 $loadaddr; bootm' в AXON
         (скрипт поставит сам)
 
@@ -1029,9 +1031,11 @@ Which loader goes into the chainloader slot?
       - third-party build (U-Boot 2026.07), sources with the author
 
   [2] OpenWrt U-Boot (uboot-airoha, an7581_gemtek_xr1710g) - "vanilla"
-      + the same build as the Gemtek W1700K in OpenWrt; boot menu on the UART:
-        TFTP, recovery from flash, TFTP installer
-      - any recovery needs the UART and TFTP
+      + recovery without UART: press reset 1-2 s after power-on, hold until the
+        blue LED (15-20 s) - loads initramfs-recovery over TFTP from 192.168.1.10
+      + if the system in UBI does not boot, it starts recovery from flash itself
+      + boot menu on the UART: TFTP, recovery from flash, TFTP installer
+      - no web page: needs your own TFTP server on the PC
       - needs bootcmd 'flash read 0x600000 0x100000 $loadaddr; bootm' in AXON
         (the script sets it)
 
