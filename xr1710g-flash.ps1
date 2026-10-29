@@ -974,7 +974,7 @@ function Complete-Loader([string]$kind) {
     if ($kind -eq 'http') {
         Info (T 'Recovery: cable in the 10GbE port, hold reset at power-on -> http://192.168.255.1' 'Рекавери: кабель в порт 10GbE, держать reset при включении -> http://192.168.255.1')
     } else {
-        Info (T 'Recovery: reset 1-2 s after power-on, hold until the blue LED -> TFTP 192.168.1.254, file initramfs-recovery.itb' 'Рекавери: reset через 1-2 с после включения, держать до синего индикатора -> TFTP 192.168.1.254, файл initramfs-recovery.itb')
+        Info (T 'Recovery: cable in a 1 GbE port (lan3/lan4), reset 1-2 s after power-on, hold until the blue LED -> TFTP 192.168.1.254, file initramfs-recovery.itb' 'Рекавери: кабель в порт 1 Гбит (lan3/lan4), reset через 1-2 с после включения, держать до синего индикатора -> TFTP 192.168.1.254, файл initramfs-recovery.itb')
     }
 }
 
@@ -1019,7 +1019,8 @@ function Select-Loader {
         индикатора (15-20 с) - грузит initramfs-recovery по TFTP с 192.168.1.254
       + если система в UBI не грузится, сам стартует recovery из флеша
       + меню загрузки в UART: TFTP, recovery из флеша, установщик по TFTP
-      - нет веб-страницы: нужен свой TFTP-сервер на ПК
+      - нет веб-страницы: нужен свой TFTP-сервер на ПК, кабель - в порт 1 Гбит
+        (lan3/lan4), 10GbE в загрузчике не работает
       - нужен bootcmd 'flash read 0x600000 0x100000 $loadaddr; bootm' в AXON
         (скрипт поставит сам)
 
@@ -1042,7 +1043,8 @@ Which loader goes into the chainloader slot?
         blue LED (15-20 s) - loads initramfs-recovery over TFTP from 192.168.1.254
       + if the system in UBI does not boot, it starts recovery from flash itself
       + boot menu on the UART: TFTP, recovery from flash, TFTP installer
-      - no web page: needs your own TFTP server on the PC
+      - no web page: needs your own TFTP server on the PC, cable in a 1 GbE port
+        (lan3/lan4), 10GbE does not work in the loader
       - needs bootcmd 'flash read 0x600000 0x100000 $loadaddr; bootm' in AXON
         (the script sets it)
 

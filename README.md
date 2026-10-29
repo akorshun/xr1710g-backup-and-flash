@@ -63,7 +63,7 @@ there; both work with the UBI 2.0 layout.
 |---|---|---|
 | Version | U-Boot 2026.07, third-party build | U-Boot 2026.07 from OpenWrt, own XR1710G configuration (reset button, LEDs) |
 | Recovery | web page at `http://192.168.255.1` with its own DHCP; upload `sysupgrade.itb` and the loader itself from a browser | reset button: `initramfs-recovery.itb` over TFTP from a server on the PC, retried until it answers; a `fit` that does not boot falls back to the `recovery` volume; UART menu: TFTP, recovery from flash, TFTP installer |
-| How to enter recovery | cable in the **10GbE** port, hold **reset** at power-on, release when the LED goes from red to "running" | PC `192.168.1.254/24` with a TFTP server in a LAN port; power on, press **reset 1–2 s later** (held at power-on the SoC waits for a UART download) and hold it until the **blue** LED, about 15–20 s |
+| How to enter recovery | cable in the **10GbE** port, hold **reset** at power-on, release when the LED goes from red to "running" | PC `192.168.1.254/24` with a TFTP server in a **1 GbE** port (lan3/lan4, not 10GbE); power on, press **reset 1–2 s later** (held at power-on the SoC waits for a UART download) and hold it until the **blue** LED, about 15–20 s |
 | UART needed after install | no | no (a TFTP server is needed instead of a browser) |
 | Network in the loader | 10GbE | gigabit ports |
 | UBI rebuild | from the web UI, with a choice of 2.0 / 1.5 / 1.0 layout and factory restored from DSD | by hand from an initramfs |
@@ -221,7 +221,8 @@ http-uboot web recovery pick **UBI 2.0** for such images.
   start the 6 GHz AP on our unit.
 * http-uboot recovery: PC in the 10GbE port with DHCP, reset at power-on,
   `http://192.168.255.1`, target `firmware`, layout `UBI 2.0`.
-* OpenWrt U-Boot recovery: PC `192.168.1.254/24` in a LAN port, a TFTP server
+* OpenWrt U-Boot recovery: PC `192.168.1.254/24` in a **1 GbE** port (lan3/lan4 — the
+  loader has no 10GbE), a TFTP server
   serving `openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb`;
   power on, press reset 1–2 s later and hold it until the blue LED (15–20 s).
   The recovery system comes up at `192.168.1.1`, sysupgrade from there. If the
