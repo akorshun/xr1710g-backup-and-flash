@@ -46,11 +46,11 @@ skips the question).
 2. The UART header is next to the screw, counting from the screw:
    **TX – GND – VCC – N/C – RX**, 115200 8N1. Connect GND, router TX → adapter RX,
    router RX → adapter TX. **Do not connect VCC.**
-3. Ethernet from the PC goes to the **10GbE LAN port** (`lan2`) of the router: in
-   the stock loader TFTP may not work through the 1 GbE ports at all (on one unit it
-   failed on every attempt there and worked at once on 10GbE). Any PC adapter will
-   do, a gigabit one too. The stock loader's network driver is also flaky: if TFTP
-   fails the script retries, and you can move the cable while it does.
+3. Ethernet from the PC goes to a **gigabit LAN port** (`lan3`/`lan4`) of the
+   router. With the board out of its case, go by the labels on the board, not on
+   the case halves: it is easy to end up in `wan` or the 10GbE port. The stock
+   loader's network driver is flaky: if TFTP fails the script retries, and you can
+   move the cable to another port while it does.
 
 The script sets `192.168.1.254/24` on that adapter itself (and puts DHCP back at
 the end), as well as a temporary firewall rule for TFTP (UDP 69).
@@ -246,7 +246,7 @@ http-uboot web recovery pick **UBI 2.0** for such images.
   GND, TX/RX (often swapped), and that the adapter is 3.3 V.
 * **"could not stop the boot"** — the script asks you to cycle power and tries again.
 * **TFTP fails** (`attempt N of 6 failed ()` — the empty brackets mean no request
-  reached the PC) — put the cable in the 10GbE LAN port `lan2`; check that the PC
+  reached the PC) — check that the cable is in a gigabit LAN port; check that the PC
   adapter has no other address from `192.168.1.0/24` (an old manual
   `192.168.1.10`): set it to DHCP and let the script set the address. Third-party firewalls (not Windows Firewall) need UDP 69 open.
 * **An error before the "UBI 2.0 layout" step** — nothing was written to flash,

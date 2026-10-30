@@ -637,7 +637,7 @@ function Invoke-TftpLoad([string]$path, [string]$addr, [int]$tries = 6) {
             return $size
         }
         Warn (T "TFTP: attempt $i of $tries failed ($($script:Tftp.Status))" "TFTP: попытка $i из $tries не удалась ($($script:Tftp.Status))")
-        if ($i -eq 2) { Warn (T 'The stock U-Boot network driver is flaky, this is normal. If it never works, put the cable in the 10GbE LAN port (lan2): TFTP may not work through the 1 GbE ports.' 'Сетевой драйвер стокового U-Boot капризный, это нормально. Если так и не пойдёт - переткните кабель в LAN-порт 10GbE (lan2): через порты 1 Гбит TFTP может не идти.') }
+        if ($i -eq 2) { Warn (T 'The stock U-Boot network driver is flaky, this is normal. If it never works, check that the cable is in a gigabit LAN port (lan3/lan4), not wan or 10GbE.' 'Сетевой драйвер стокового U-Boot капризный, это нормально. Если так и не пойдёт - проверьте, что кабель в гигабитном LAN-порту (lan3/lan4), а не в wan или 10GbE.') }
         Start-Sleep -Seconds 2
     }
     Fail (T "could not load $name over TFTP. Check the cable, the address $PcIp and the firewall" "не удалось загрузить $name по TFTP. Проверьте кабель, адрес $PcIp и брандмауэр")
@@ -1164,7 +1164,7 @@ layout must already be installed (Install got as far as writing the loader).
 Wiring:
   * USB-UART 3.3 V to the header by the screw: TX, GND, VCC (do not connect), N/C, RX
     (router TX -> adapter RX, router RX -> adapter TX)
-  * Ethernet cable from the PC to the 10GbE LAN port (lan2) of the router
+  * Ethernet cable from the PC to a gigabit LAN port (lan3/lan4) of the router
   * PC address $PcIp/24
 
 "@ @"
@@ -1172,7 +1172,7 @@ Wiring:
 Подключение:
   * USB-UART 3.3 В к разъёму у винта: TX, GND, VCC (не подключать), N/C, RX
     (TX роутера -> RX адаптера, RX роутера -> TX адаптера)
-  * кабель Ethernet от ПК в LAN-порт 10GbE (lan2) роутера
+  * кабель Ethernet от ПК в гигабитный LAN-порт (lan3/lan4) роутера
   * адрес ПК $PcIp/24
 
 "@) -ForegroundColor Green
