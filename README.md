@@ -92,6 +92,16 @@ Download the repository (Code → Download ZIP, or `git clone`), unpack it, then
 .\xr1710g-flash.ps1 -Firmware D:\my-sysupgrade.itb   # your own OpenWrt build
 ```
 
+If PowerShell refuses with "is not digitally signed" (the files of a downloaded
+ZIP are marked as coming from the internet), either unblock them once from the
+repository folder, or start the script bypassing the policy for this one run
+(`xr1710g-flash.cmd` does the latter):
+
+```powershell
+Get-ChildItem -Recurse | Unblock-File
+powershell -ExecutionPolicy Bypass -File .\xr1710g-flash.ps1 -Mode Backup
+```
+
 The script asks for administrator rights itself. Then it:
 
 1. asks for the message language (English / Русский, English by default; not asked

@@ -91,6 +91,16 @@
 .\xr1710g-flash.ps1 -Firmware D:\my-sysupgrade.itb   # своя сборка OpenWrt
 ```
 
+Если PowerShell отказывается запускать скрипт с ошибкой «не имеет цифровой
+подписи» (файлы из скачанного ZIP помечены как полученные из интернета), можно
+один раз снять эту пометку из папки репозитория или запустить скрипт в обход
+политики только на этот запуск (`xr1710g-flash.cmd` делает именно так):
+
+```powershell
+Get-ChildItem -Recurse | Unblock-File
+powershell -ExecutionPolicy Bypass -File .\xr1710g-flash.ps1 -Mode Backup
+```
+
 Скрипт сам попросит права администратора. Дальше:
 
 1. спросит язык сообщений (English / Русский, по умолчанию English; с `-Lang ru`
