@@ -51,7 +51,11 @@ def tmpfile(name):
 
 if cmd == "echo XR_SSH_OK":
     print("XR_SSH_OK")
-elif cmd.startswith("for b in /dev/ubiblock*;") and "ubidetach -m 2" in cmd:
+elif "ubidetach -m 2" in cmd:
+    # a flashed router has the "fit" volume mapped by ubiblock and claimed by fitblk
+    if b"fit," in open(path("mtd2.bin"), "rb").read(256) and "fitblk" not in cmd:
+        fail("ubiblock: error!: cannot remove block device\n"
+             "         error 16 (Resource busy)", 1)
     open(path("detached"), "w").write("1")
 elif cmd.startswith("cat /proc/mtd"):
     print("dev:    size   erasesize  name")

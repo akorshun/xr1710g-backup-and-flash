@@ -775,7 +775,11 @@ function Test-MtdLayout([string]$procMtd) {
 
 # Detach UBI from the ubi partition so the kernel writes nothing there during a dump or write.
 function Dismount-Ubi {
-    Invoke-Ssh 'for b in /dev/ubiblock*; do [ -e "$b" ] && ubiblock -r "/dev/ubi${b#/dev/ubiblock}"; done; ubidetach -m 2 2>/dev/null; [ ! -e /sys/class/ubi/ubi0 ]' 60 | Out-Null
+    # On a router flashed before, the kernel maps the "fit" volume as a ubiblock (ubi.block=
+    # in the bootargs) and fitblk claims that for /dev/fit*: release fitblk first, otherwise
+    # ubiblock -r fails with "Resource busy".
+    Invoke-Ssh ('for f in /dev/fit[0-9]*; do [ -b "$f" ] && fitblk "$f" 2>/dev/null; done; ' +
+        'for b in /dev/ubiblock*; do [ -e "$b" ] && ubiblock -r "/dev/ubi${b#/dev/ubiblock}"; done; ubidetach -m 2 2>/dev/null; [ ! -e /sys/class/ubi/ubi0 ]') 60 | Out-Null
     Info (T 'UBI detached from the ubi partition' 'UBI отключён от раздела ubi')
 }
 

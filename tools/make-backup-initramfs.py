@@ -2,7 +2,7 @@
 """Make the read-only "backup" initramfs for the XR1710G from an OpenWrt
 initramfs-recovery.itb.
 
-Two changes in the device tree inside the FIT, both keeping every size:
+Three changes in the device tree inside the FIT, all keeping every size:
 
 * the "ubi" partition loses its `compatible = "linux,ubi"` (the value becomes
   "no-attach"), so the kernel does not attach UBI through the DT. On a stock
@@ -13,7 +13,12 @@ Two changes in the device tree inside the FIT, both keeping every size:
   router does not have, and the Ethernet driver would wait for it forever
   (deferred probe), leaving the initramfs without network. The properties are
   renamed to "cells"/"cell-names" by pointing their names at the tail of the
-  same strings, so the driver falls back to a random MAC.
+  same strings, so the driver falls back to a random MAC;
+* "ubi.block=0,fit root=/dev/fit0" in /chosen/bootargs is blanked out with
+  spaces. On a router flashed before, the kernel still attaches the UBI by
+  name (OpenWrt patch 490); ubi.block= would then map the "fit" volume and
+  fitblk would claim it, and the volume could not be detached for the backup
+  ("Resource busy").
 
 Every other byte stays as built by OpenWrt; the crc32/sha1 hashes of the fdt
 image are recomputed so U-Boot accepts the FIT.
@@ -34,6 +39,7 @@ UBI_REG = struct.pack(">II", 0x00700000, 0x1B700000)  # UBI 2.0
 
 
 RENAME = {"nvmem-cells": "cells", "nvmem-cell-names": "cell-names"}
+BLOCK_ARGS = b"ubi.block=0,fit root=/dev/fit0"
 
 
 def eth_mac_props(fit, dtb_off):
@@ -111,6 +117,8 @@ def describe(fit):
     print("partition : %s" % node)
     print("reg       : %s" % fit[reg[0]:reg[0] + reg[1]].hex())
     print("compatible: %s" % (fit[comp[0]:comp[0] + comp[1]] if comp else None))
+    args = props(fit, doff).get(("/chosen", "bootargs"))
+    print("bootargs  : %s" % (fit[args[0]:args[0] + args[1]].rstrip(b"\0").decode() if args else None))
     left = eth_mac_props(fit, doff)
     print("eth nvmem  : %s" % (", ".join("%s:%s" % (p, n) for p, n, _ in left) or "none"))
     blob = fit[doff:doff + dlen]
@@ -145,6 +153,11 @@ def patch(src, dst):
         s0 = doff + off_strings + new
         assert fit[s0:fit.index(b"\0", s0)].decode() == RENAME[name]
         struct.pack_into(">I", fit, pos, new)
+    args = props(fit, doff).get(("/chosen", "bootargs"))
+    i = fit.find(BLOCK_ARGS, args[0], args[0] + args[1]) if args else -1
+    if i < 0:
+        raise SystemExit("%s: /chosen/bootargs has no %s" % (src, BLOCK_ARGS.decode()))
+    fit[i:i + len(BLOCK_ARGS)] = b" " * len(BLOCK_ARGS)
     blob = bytes(fit[doff:doff + dlen])
     for algo, (off, ln) in hashes.items():
         val = (struct.pack(">I", zlib.crc32(blob) & 0xFFFFFFFF) if algo == "crc32"

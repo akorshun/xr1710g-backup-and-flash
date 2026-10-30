@@ -119,15 +119,19 @@
 | `reset`, ожидание OpenWrt, проверка `board_name` | — | нет |
 
 `xr1710g-backup-initramfs.itb` — это `initramfs-recovery.itb` из той же сборки
-OpenWrt с двумя изменениями в DTB (см. `tools/make-backup-initramfs.py`,
-изменяется 39 байт, размеры не меняются, хеши FIT пересчитаны):
+OpenWrt с тремя изменениями в DTB (см. `tools/make-backup-initramfs.py`,
+изменяется 68 байт, размеры не меняются, хеши FIT пересчитаны):
 
 * у раздела `ubi` убран `compatible = "linux,ubi"`, чтобы ядро не пыталось
   подключить UBI поверх стоковых данных до того, как с них снята копия;
 * у MAC-узлов Ethernet (`gdm1`, `gdm2`, `gdm4`) отключены `nvmem-cells`: они
   ссылаются на том `factory` в UBI, которого на стоке нет, и без этого драйвер
   Ethernet бесконечно ждёт его (deferred probe) и сети в initramfs нет —
-  именно так было при первом запуске на железе. Без них MAC случайный.
+  именно так было при первом запуске на железе. Без них MAC случайный;
+* из bootargs затёрто `ubi.block=0,fit root=/dev/fit0`. На уже прошитом роутере
+  ядро иначе отдало бы том `fit` блочным устройством под `fitblk`, и UBI нельзя
+  было бы отключить перед копией («Resource busy»). Скрипт на всякий случай ещё и
+  освобождает `fitblk` перед отключением.
 
 Кроме того, ядро OpenWrt подключает раздел с
 именем `ubi` само, если он начинается с `UBI#` (патч 490). Стоковая прошивка
@@ -280,7 +284,7 @@ reset
 | `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r8`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r8) (коммит `c2235765d1`) | `85ed1978…c21ca4` |
 | `firmware/openwrt-…-initramfs-recovery.itb` | там же | `e984690c…440b5d64` |
 | `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `fd3e1bbe…6c7a41` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `cf32aee4…4e080` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `1a38ad36…d61988` |
 
 Полные суммы — в `firmware/SHA256SUMS`, скрипт сверяет их при каждом запуске.
 
