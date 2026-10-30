@@ -775,11 +775,15 @@ function Test-MtdLayout([string]$procMtd) {
 
 # Detach UBI from the ubi partition so the kernel writes nothing there during a dump or write.
 function Dismount-Ubi {
-    # On a router flashed before, the kernel maps the "fit" volume as a ubiblock (ubi.block=
-    # in the bootargs) and fitblk claims that for /dev/fit*: release fitblk first, otherwise
-    # ubiblock -r fails with "Resource busy".
-    Invoke-Ssh ('for f in /dev/fit[0-9]*; do [ -b "$f" ] && fitblk "$f" 2>/dev/null; done; ' +
-        'for b in /dev/ubiblock*; do [ -e "$b" ] && ubiblock -r "/dev/ubi${b#/dev/ubiblock}"; done; ubidetach -m 2 2>/dev/null; [ ! -e /sys/class/ubi/ubi0 ]') 60 | Out-Null
+    # On a router flashed before, the kernel maps the "fit" volume as a ubiblock by itself
+    # (OpenWrt patch 491) and fitblk claims it for /dev/fit*, so ubiblock -r fails with
+    # "Resource busy". Release fitblk first; it lets go of the ubiblock in deferred work, so
+    # retry the removal for a while. On failure, show what still holds it.
+    Invoke-Ssh ('for f in /dev/fit[0-9]*; do [ -b "$f" ] && fitblk "$f"; done; i=0; ' +
+        'while :; do for b in /dev/ubiblock*; do [ -e "$b" ] && ubiblock -r "/dev/ubi${b#/dev/ubiblock}" 2>/dev/null; done; ' +
+        'ls /dev/ubiblock* >/dev/null 2>&1 || break; i=$((i+1)); [ $i -ge 15 ] && break; sleep 1; done; ' +
+        'ubidetach -m 2 2>/dev/null; [ ! -e /sys/class/ubi/ubi0 ] || ' +
+        '{ { echo "still attached:"; ls -l /dev/fit* /dev/ubiblock* 2>&1; grep -E "fit|ubi" /proc/mounts; } >&2; exit 1; }') 90 | Out-Null
     Info (T 'UBI detached from the ubi partition' 'UBI отключён от раздела ubi')
 }
 

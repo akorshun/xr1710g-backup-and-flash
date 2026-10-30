@@ -121,8 +121,8 @@ script's steps to `flash.log`; both are in the backup folder.
 | `reset`, wait for OpenWrt, check `board_name` | — | no |
 
 `xr1710g-backup-initramfs.itb` is the `initramfs-recovery.itb` from the same
-OpenWrt build with three changes in its DTB (see `tools/make-backup-initramfs.py`;
-68 bytes change, no sizes change, the FIT hashes are recomputed):
+OpenWrt build with two changes in its DTB (see `tools/make-backup-initramfs.py`;
+39 bytes change, no sizes change, the FIT hashes are recomputed):
 
 * the `ubi` partition loses `compatible = "linux,ubi"`, so the kernel does not try
   to attach UBI over the stock data before it is backed up;
@@ -130,11 +130,7 @@ OpenWrt build with three changes in its DTB (see `tools/make-backup-initramfs.py
   point at the `factory` volume in UBI, which a stock router does not have, and
   without this change the Ethernet driver waits for it forever (deferred probe),
   leaving the initramfs without network — exactly what happened on the first
-  hardware run. Without them the MACs are random;
-* `ubi.block=0,fit root=/dev/fit0` is blanked out of the bootargs. On a router
-  flashed before, the kernel would map the `fit` volume as a block device for
-  `fitblk`, and UBI could then not be detached for the backup ("Resource busy").
-  The script also releases `fitblk` before detaching, in case it is there.
+  hardware run. Without them the MACs are random.
 
 Also, the OpenWrt kernel attaches a partition named `ubi` by itself when it
 starts with `UBI#` (patch 490). The stock firmware (`XR1710G_fw_5.1.1.12`) keeps
@@ -142,7 +138,10 @@ its own UBI there too, with the volumes `rootfs_data`, `config` and `log` (its
 settings and syslog), so an attached UBI alone does not mean an earlier flash. The
 script looks at the volume names: only OpenWrt's (`ubootenv`, `factory`, `fit`,
 `recovery`…) make it warn that the backup is not stock. In both cases it detaches
-UBI (`ubidetach`) before the backup and before a restore.
+UBI (`ubidetach`) before the backup and before a restore. On a router flashed
+before, the kernel also maps the `fit` volume as a ubiblock (OpenWrt patch 491)
+and `fitblk` claims it, so the script first releases `/dev/fit*` with `fitblk`,
+then waits until the ubiblock can be removed.
 
 The stock `bootcmd` varies: the http-uboot README gives
 `flash read 0x602100 0x4000000 $loadaddr; bootm`, while one of our XR1710G units
@@ -286,7 +285,7 @@ reset
 | `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, release `xr1710g-r8`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r8) (commit `c2235765d1`) | `85ed1978…c21ca4` |
 | `firmware/openwrt-…-initramfs-recovery.itb` | same | `e984690c…440b5d64` |
 | `firmware/openwrt-…-squashfs-sysupgrade.itb` | same | `fd3e1bbe…6c7a41` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` from `initramfs-recovery.itb` | `1a38ad36…d61988` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` from `initramfs-recovery.itb` | `cf32aee4…4e080` |
 
 Full sums are in `firmware/SHA256SUMS`; the script checks them on every run.
 
