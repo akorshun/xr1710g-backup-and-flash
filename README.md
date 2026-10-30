@@ -6,7 +6,8 @@ A script for the Gemtek XR1710G (Brightspeed XR1710G, Airoha AN7581, 512 MiB SPI
 It takes the router from the stock firmware to a working OpenWrt by itself:
 
 1. stops the stock boot loader over UART and **takes a full flash backup** to the
-   PC (all 512 MiB, checked with sha256) before anything is written to flash;
+   PC (all 512 MiB, checked with sha256) before OpenWrt is written — but the stock
+   firmware banks are already erased by then, see the warning below;
 2. lays the flash out for **UBI 2.0** right away (`ubi` = `0x700000 + 0x1b700000`,
    528 PEBs reserved for the vendor loader's BMT) and installs OpenWrt;
 3. writes **the loader of your choice** to the `chainloader` slot — U-Boot with
@@ -17,14 +18,31 @@ There are also "backup only", "restore stock from a backup" and "loader only" mo
 Messages are in English or Russian: the script asks at start (`-Lang en` / `-Lang ru`
 skips the question).
 
+> [!WARNING]
+> **The backup does not contain the stock firmware, and Restore does not bring the
+> stock firmware back.** Found on hardware on 2026-10-31. To fetch the backup
+> initramfs, the script runs the OpenWrt U-Boot from RAM. While loading its
+> environment from UBI, that U-Boot attaches UBI on the whole `ubi` area from
+> `0x700000`, which on a stock router also holds the two vendor firmware banks
+> (`tclinux`, `0x600000`-`0x8600000`, a 41 MiB signed image each). UBI does not
+> recognise those blocks and erases them, **before the backup is taken**. The
+> backup then has only the first 1 MiB of the stock image (in
+> `mtd1-chainloader.bin`); after Restore the stock loader stops with
+> `BL31: Failed to verify image id 5`. The device specific data survives: the
+> `vendor` partition (MACs, serial number, Wi-Fi calibration) and the stock UBI
+> with its settings are in the backup. Getting the stock firmware back needs a
+> complete `tclinux.bin` (`XR1710G_fw_5.1.1.12`) from elsewhere. Until this is
+> fixed, run the script only if you do not need the stock firmware again.
+
 > [!NOTE]
 > **Verified on hardware (XR1710G, 2026-10-28):** stock backup, UBI 2.0 layout,
 > OpenWrt `xr1710g-r2` install and the OpenWrt loader (`-Loader openwrt`) — the
 > router boots OpenWrt, Ethernet and Wi-Fi (EEPROM from the factory volume) work.
 > `firmware/` now carries the newer `xr1710g-r8` build; its reset-button TFTP
 > recovery has not been run through the script on hardware yet.
-> The http-uboot loader (`-Loader http`) and Restore mode are so far covered only
-> by the emulator (`tests/`). The stock backup is taken first, the vendor loader
+> The http-uboot loader (`-Loader http`) is so far covered only by the emulator
+> (`tests/`). Restore ran on hardware on 2026-10-31: it writes the backup back
+> exactly (sha256 and `cmp.b` match), but see the warning above. The vendor loader
 > (0x0–0x600000) is never touched, and the UART stays a working way to recover.
 
 ## What you need
@@ -86,7 +104,7 @@ Download the repository (Code → Download ZIP, or `git clone`), unpack it, then
 .\xr1710g-flash.ps1                              # install, asks for everything
 .\xr1710g-flash.ps1 -Lang en                     # English messages, no language question
 .\xr1710g-flash.ps1 -ComPort COM5 -Loader http   # no questions about the port and loader
-.\xr1710g-flash.ps1 -Mode Backup                 # stock backup only, flash untouched
+.\xr1710g-flash.ps1 -Mode Backup                 # backup only; erases the stock firmware banks, see the warning
 .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
 .\xr1710g-flash.ps1 -Mode Loader -Loader openwrt   # slot + bootcmd only (see below)
 .\xr1710g-flash.ps1 -Firmware D:\my-sysupgrade.itb   # your own OpenWrt build
@@ -172,7 +190,7 @@ Folder `backup\<date-time>\`:
 |---|---|
 | `mtd0-vendor.bin` | 6 MiB: AXON loader, its environment, DSD (MACs, serial number), Wi-Fi EEPROM |
 | `mtd1-chainloader.bin` | 1 MiB: the start of the stock `tclinux` bank |
-| `mtd2-ubi.bin` | 439 MiB: stock firmware banks and data |
+| `mtd2-ubi.bin` | 439 MiB: the stock UBI with its data; the stock firmware banks in it are already erased (see the warning at the top) |
 | `mtd3-reserved_bmt.bin` | 66 MiB: the end of flash with the vendor BMT tables |
 | `SHA256SUMS` | sums checked against the flash on the router |
 | `stock-uboot-env.txt` | `printenv` of the stock loader |
@@ -180,9 +198,14 @@ Folder `backup\<date-time>\`:
 | `router-info.txt`, `flash.log`, `serial.log` | `/proc/mtd`, bad blocks, logs |
 
 The backup is read from Linux as is (data after ECC, no OOB). Keep the folder
-somewhere safe — it is the only way back to the stock firmware.
+somewhere safe: it holds the device specific data (`vendor`, the stock UBI), but
+not a bootable stock firmware (see the warning at the top).
 
 ### Restoring the stock firmware
+
+> [!WARNING]
+> With a backup taken by this script the stock firmware does **not** boot after
+> Restore: the firmware banks are missing from it (see the warning at the top).
 
 ```powershell
 .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
