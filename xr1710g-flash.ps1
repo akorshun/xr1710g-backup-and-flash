@@ -39,12 +39,11 @@
     Install/Backup: where to put the backup (default backup\<date-time>).
     Restore: folder with an earlier backup.
 .PARAMETER StockDump
-    Restore: where the stock firmware banks come from. Default: the stock image in
-    firmware\ (XR1710G_fw_5.1.1.12). Or a stock dump - a folder with mtd5_tclinux.bin
-    (and mtd8_tclinux_slave.bin) - or a tclinux.bin bank. The image written is the banks
-    plus the stock system UBI of -BackupDir; vendor (MACs, Wi-Fi calibration) stays the
-    router's own. Needed because backups taken by this script do not contain the banks.
-    "none" writes the backup back as it is.
+    Restore: picks the variant without asking. "none" - write the backup back as it is
+    (needs a backup with the stock firmware banks). A stock dump - a folder with
+    mtd5_tclinux.bin (and mtd8_tclinux_slave.bin), or a tclinux.bin bank - is written
+    with the stock system UBI of -BackupDir. Not given: the script asks; it offers the
+    backup as it is when it is complete, and otherwise the stock image in firmware    plus the backup's system UBI. vendor (MACs, Wi-Fi calibration) is never written.
 .EXAMPLE
     .\xr1710g-flash.ps1 -ComPort COM5 -Loader http
 .EXAMPLE
@@ -844,6 +843,36 @@ function Get-UbiVolumeNames([IO.FileStream]$fs, [long]$start, [long]$len) {
     return , $names
 }
 
+# A complete stock backup: the slot starts with the stock FIP and tclinux image, and both
+# banks are there, not UBI (the RAM U-Boot of older versions of this script erased them).
+function Test-BackupBanks([string]$dir) {
+    $h = [byte[]]::new(0x2004)
+    $fs = [IO.File]::OpenRead((Join-Path $dir 'mtd1-chainloader.bin')); try { [void]$fs.Read($h, 0, $h.Length) } finally { $fs.Close() }
+    if ([BitConverter]::ToString($h, 0, 8) -ne '01-00-64-AA-78-56-34-12' -or [Text.Encoding]::ASCII.GetString($h, 0x2000, 4) -ne 'HDR2') { return $false }
+    $a = [byte[]]::new(8); $b = [byte[]]::new(8)
+    $fs = [IO.File]::OpenRead((Join-Path $dir 'mtd2-ubi.bin'))
+    try { [void]$fs.Read($a, 0, 8); $fs.Position = $StockBank - 0x100000; [void]$fs.Read($b, 0, 8) } finally { $fs.Close() }
+    return ([Text.Encoding]::ASCII.GetString($a, 0, 4) -ne 'UBI#' -and [BitConverter]::ToString($b) -eq '01-00-64-AA-78-56-34-12')
+}
+
+function Select-RestoreVariant([bool]$complete) {
+    Write-Host ''
+    if ($complete) {
+        Write-Host (T '  [1] the backup as it is - the full stock firmware of this router (recommended)' '  [1] копия как есть - полный сток этого роутера (рекомендуется)')
+    } else {
+        Write-Host (T '  [1] the backup as it is - NOT possible: this backup lacks the stock firmware banks' '  [1] копия как есть - НЕЛЬЗЯ: в этой копии нет банков стоковой прошивки')
+    }
+    Write-Host (T '  [2] stock image from firmware\ (XR1710G_fw_5.1.1.12) + this router''s settings from the backup' '  [2] стоковый образ из firmware\ (XR1710G_fw_5.1.1.12) + настройки этого роутера из копии')
+    $def = if ($complete) { '1' } else { '2' }
+    $a = Read-Host ((T 'Restore variant [{0}]' 'Вариант восстановления [{0}]') -f $def)
+    if (-not $a) { $a = $def }
+    switch ($a) {
+        '1' { if (-not $complete) { Fail (T 'this backup cannot be written as it is - choose 2' 'эту копию нельзя записать как есть - выберите 2') }; return 'backup' }
+        '2' { return 'image' }
+        default { Fail (T 'enter 1 or 2' 'нужно 1 или 2') }
+    }
+}
+
 function New-StockImage([string]$dump, [string]$backupUbi, [string]$outDir) {
     if (Test-Path -LiteralPath $dump -PathType Container) {
         $b1 = @('mtd5_tclinux.bin', 'tclinux.bin') | ForEach-Object { Join-Path $dump $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
@@ -1288,11 +1317,16 @@ layout must already be installed (Install got as far as writing the loader).
         if (-not $script:RestoreBootcmd) { Fail (T 'stock-uboot-env.txt has no bootcmd' 'в stock-uboot-env.txt нет bootcmd') }
         $script:RestoreBootcmd = $script:RestoreBootcmd.Substring(8)
         Info (T "bootcmd will be restored to '$($script:RestoreBootcmd)'" "будет восстановлен bootcmd='$($script:RestoreBootcmd)'")
-        # The stock image shipped in firmware\ unless another dump is given; "-StockDump none"
-        # writes the backup back as it is (for a backup that does hold the firmware banks).
-        if (-not $StockDump) { $StockDump = Join-Path $FwDir $Files.Stock }
-        if ($StockDump -eq 'none') { $StockDump = '' }
-        if ($StockDump) {
+        # Two ways back: the backup as it is, when it holds the stock firmware banks (backups
+        # taken with xr1710g-ram-uboot.itb do), or a stock image (firmware\ or -StockDump) plus
+        # the stock system UBI of the backup (works for older backups that lack the banks).
+        $complete = Test-BackupBanks $BackupDir
+        if ($StockDump -eq 'none') { $variant = 'backup' }
+        elseif ($StockDump) { $variant = 'image' }
+        elseif ($Yes) { $variant = if ($complete) { 'backup' } else { 'image' } }
+        else { $variant = Select-RestoreVariant $complete }
+        if ($variant -eq 'image') {
+            if (-not $StockDump) { $StockDump = Join-Path $FwDir $Files.Stock }
             New-Item -ItemType Directory -Force -Path $Session | Out-Null
             $img = New-StockImage $StockDump (Join-Path $BackupDir 'mtd2-ubi.bin') $Session
             $script:RestoreSlot = $img.Slot
@@ -1300,7 +1334,8 @@ layout must already be installed (Install got as far as writing the loader).
         } else {
             $script:RestoreSlot = Join-Path $BackupDir 'mtd1-chainloader.bin'
             $script:RestoreUbi = Join-Path $BackupDir 'mtd2-ubi.bin'
-            Warn (T '-StockDump none: the backup is written as it is; backups taken by this script lack the stock firmware banks, and the stock firmware will not boot from them' '-StockDump none: копия пишется как есть; в копиях этого скрипта нет банков стоковой прошивки, и сток с них не загрузится')
+            if ($complete) { Info (T 'the backup holds the stock firmware banks, it is written back as it is' 'в копии есть банки стоковой прошивки, она пишется обратно как есть') }
+            else { Warn (T 'the backup has no stock firmware banks: after writing it as it is the stock firmware will not boot' 'в копии нет банков стоковой прошивки: если записать её как есть, сток не загрузится') }
         }
         Confirm-Step (T 'The stock firmware will be written back over OpenWrt.' 'Сток будет записан обратно поверх OpenWrt.')
     }
@@ -1364,7 +1399,8 @@ Wiring:
             Set-UbootVar 'bootcmd' $script:RestoreBootcmd
             Invoke-Uboot 'saveenv' 60 | Out-Null
         }
-        if ($StockDump) { Remove-Item -LiteralPath $script:RestoreSlot, $script:RestoreUbi -ErrorAction SilentlyContinue }
+        # only the images built in session\, never the backup's own files
+        if ($script:RestoreUbi -like (Join-Path $Session '*')) { Remove-Item -LiteralPath $script:RestoreSlot, $script:RestoreUbi -ErrorAction SilentlyContinue }
         Say (T 'Done: the stock firmware is back. The router is rebooting into it.' 'Готово: сток записан обратно. Роутер перезагружается в стоковую прошивку.')
         $script:C.Send("reset`r")
         Start-Sleep -Seconds 5
