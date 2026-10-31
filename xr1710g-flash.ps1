@@ -688,9 +688,20 @@ function Enter-RamLinux {
     Say (T 'Loading the OpenWrt initramfs into RAM' 'Загрузка initramfs OpenWrt в ОЗУ')
     Invoke-Uboot "setenv ipaddr $UbootIp" | Out-Null
     Invoke-Uboot "setenv serverip $PcIp" | Out-Null
-    Invoke-TftpLoad (Join-Path $FwDir $Files.Backup) '$initaddr' | Out-Null
-    $m = $script:C.Mark()
-    $script:C.Send("bootm `$initaddr#`$bootconf`r")
+    # Not at $initaddr (0x89000000): the stock loader's Ethernet DMA stays active after it
+    # hands over, and packets that arrive meanwhile (e.g. SSDP from a browser on the PC)
+    # land around there and corrupt the FIT (seen on hardware). Load higher, and load again
+    # if U-Boot still rejects the image.
+    $addr = '0x90000000'
+    for ($try = 1; ; $try++) {
+        Invoke-TftpLoad (Join-Path $FwDir $Files.Backup) $addr | Out-Null
+        $m = $script:C.Mark()
+        $script:C.Send("bootm $addr#`$bootconf`r")
+        $pos = $script:C.WaitFor('Starting kernel|ERROR|Bad FIT|Wrong Image|U-Boot> ?$', $m, (Scale 60))
+        if ($pos -ge 0 -and $script:C.WaitFor('Starting kernel', $m, 10) -ge 0) { break }
+        if ($try -ge 3) { Fail (T 'U-Boot rejects the initramfs image in RAM (see serial.log)' 'U-Boot отвергает образ initramfs в ОЗУ (см. serial.log)') }
+        Warn (T "the initramfs image in RAM was rejected, loading it again ($try of 3)" "образ initramfs в ОЗУ отвергнут, загружаю заново ($try из 3)")
+    }
     if ($script:C.WaitFor('Please press Enter to activate this console', $m, (Scale 240)) -lt 0) {
         Fail (T 'the initramfs did not boot within 4 minutes' 'initramfs не загрузился за 4 минуты')
     }
