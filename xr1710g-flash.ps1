@@ -1003,16 +1003,13 @@ function Install-Ubi([string]$dir, [string]$sysupgrade) {
     Info (T 'UBI 2.0 laid out, OpenWrt and the factory volume written and read back' 'UBI 2.0 размечен, OpenWrt и том factory записаны и прочитаны обратно')
 }
 
-function Restart-ToStock([switch]$Cold) {
+function Restart-ToStock {
     # Reboot over the console, not ssh: ssh notices the dropped connection seconds
     # later, and the stock loader waits for a key for under a second. Returns the
     # output position before the reboot, from which Enter-StockUboot looks for the banner.
-    # -Cold powers the router off instead: when a valid stock image is in flash, the stock
-    # loader's network after a warm reset from OpenWrt loses most TFTP packets (seen on
-    # hardware), while after a power cycle it works.
     Invoke-Ssh 'sync' 60 -NoFail | Out-Null
     $m = $script:C.Mark()
-    $script:C.Send($(if ($Cold) { "`rsync; poweroff`r" } else { "`rsync; reboot`r" }))
+    $script:C.Send("`rsync; reboot`r")
     return $m
 }
 
@@ -1022,8 +1019,23 @@ function Write-Slot([string]$path, [string]$what) {
     Invoke-Uboot "setenv ipaddr $UbootIp" | Out-Null
     Invoke-Uboot "setenv serverip $PcIp" | Out-Null
     Invoke-Uboot 'mw.b 0x89000000 0xff 0x100000' -NoFail | Out-Null
-    $size = Invoke-TftpLoad $path '0x89000000'
+    $size = (Get-Item -LiteralPath $path).Length
     if ($size -gt 0x100000) { Fail (T "$path is larger than 1 MiB" "$path больше 1 МиБ") }
+    # In 128 KiB pieces: the stock loader's TFTP gives a transfer up after about 10
+    # timeouts, and on some units it loses packets so often that a whole 1 MiB file
+    # never makes it in one go (seen on hardware), while each piece does.
+    $chunk = 0x20000
+    $data = [IO.File]::ReadAllBytes($path)
+    $dir = Join-Path $Session 'slot'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    for ($off = 0; $off -lt $size; $off += $chunk) {
+        $part = Join-Path $dir ('{0}.{1:x5}' -f (Split-Path $path -Leaf), $off)
+        $n = [Math]::Min($chunk, $size - $off)
+        $buf = [byte[]]::new($n); [Array]::Copy($data, $off, $buf, 0, $n)
+        [IO.File]::WriteAllBytes($part, $buf)
+        Invoke-TftpLoad $part ('0x{0:x}' -f (0x89000000 + $off)) | Out-Null
+    }
+    Info (T "$(Split-Path $path -Leaf) loaded into RAM ($size bytes)" "$(Split-Path $path -Leaf) загружен в ОЗУ ($size байт)")
     $hex = Format-Hex $size
     for ($try = 1; $try -le 2; $try++) {
         $o = Invoke-Uboot 'flash erase 0x600000 0x100000' 120
@@ -1335,8 +1347,8 @@ Wiring:
         $got = (Invoke-Ssh 'sha256sum /dev/mtd2' 600).Out.Split(' ')[0].Trim()
         if ($got -ne $want) { Warn (T 'reading ubi back does not match the backup byte for byte (happens with new bad blocks)' 'чтение ubi не совпало с копией побайтно (так бывает при новых плохих блоках)') }
         else { Info (T 'the ubi area matches the backup' 'область ubi совпадает с копией') }
-        $m = Restart-ToStock -Cold
-        Enter-StockUboot (T 'Power the router off and on now (the stock loader needs a cold start to write the slot)' 'Сейчас выключите и включите питание роутера (для записи слота стоковому загрузчику нужен холодный старт)') $m
+        $m = Restart-ToStock
+        Enter-StockUboot (T 'Rebooting into the stock U-Boot' 'Перезагрузка в стоковый U-Boot') $m
         Write-Slot $script:RestoreSlot (T 'the stock start of tclinux' 'стоковое начало tclinux')
         if ((Get-UbootVar 'bootcmd') -cne $script:RestoreBootcmd) {
             Set-UbootVar 'bootcmd' $script:RestoreBootcmd
