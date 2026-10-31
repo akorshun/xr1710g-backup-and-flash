@@ -1003,13 +1003,16 @@ function Install-Ubi([string]$dir, [string]$sysupgrade) {
     Info (T 'UBI 2.0 laid out, OpenWrt and the factory volume written and read back' 'UBI 2.0 размечен, OpenWrt и том factory записаны и прочитаны обратно')
 }
 
-function Restart-ToStock {
+function Restart-ToStock([switch]$Cold) {
     # Reboot over the console, not ssh: ssh notices the dropped connection seconds
     # later, and the stock loader waits for a key for under a second. Returns the
     # output position before the reboot, from which Enter-StockUboot looks for the banner.
+    # -Cold powers the router off instead: when a valid stock image is in flash, the stock
+    # loader's network after a warm reset from OpenWrt loses most TFTP packets (seen on
+    # hardware), while after a power cycle it works.
     Invoke-Ssh 'sync' 60 -NoFail | Out-Null
     $m = $script:C.Mark()
-    $script:C.Send("`rsync; reboot`r")
+    $script:C.Send($(if ($Cold) { "`rsync; poweroff`r" } else { "`rsync; reboot`r" }))
     return $m
 }
 
@@ -1332,8 +1335,8 @@ Wiring:
         $got = (Invoke-Ssh 'sha256sum /dev/mtd2' 600).Out.Split(' ')[0].Trim()
         if ($got -ne $want) { Warn (T 'reading ubi back does not match the backup byte for byte (happens with new bad blocks)' 'чтение ubi не совпало с копией побайтно (так бывает при новых плохих блоках)') }
         else { Info (T 'the ubi area matches the backup' 'область ubi совпадает с копией') }
-        $m = Restart-ToStock
-        Enter-StockUboot (T 'Rebooting into the stock U-Boot' 'Перезагрузка в стоковый U-Boot') $m
+        $m = Restart-ToStock -Cold
+        Enter-StockUboot (T 'Power the router off and on now (the stock loader needs a cold start to write the slot)' 'Сейчас выключите и включите питание роутера (для записи слота стоковому загрузчику нужен холодный старт)') $m
         Write-Slot $script:RestoreSlot (T 'the stock start of tclinux' 'стоковое начало tclinux')
         if ((Get-UbootVar 'bootcmd') -cne $script:RestoreBootcmd) {
             Set-UbootVar 'bootcmd' $script:RestoreBootcmd

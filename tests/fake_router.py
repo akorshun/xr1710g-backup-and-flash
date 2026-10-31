@@ -431,7 +431,8 @@ class Router:
             line = self.readline("root@OpenWrt:/# ", intr_ok=False)
             if line is None:
                 break
-            if line.strip() == "sync; reboot":
+            if line.strip() in ("sync; reboot", "sync; poweroff"):
+                # poweroff: the tester "cycles power" at once, so it boots like a reboot
                 open(path("reboot"), "w").write("1")
                 break
             if "authorized_keys" in line and kind == "initramfs":
