@@ -100,6 +100,9 @@ elif cmd.startswith("sh /tmp/xr/install-ubi.sh "):
     assert fac[0x8000:0x8000 + 17] == b"XR1710G0123456789", "bad serial"
     with open(path("mtd2.bin"), "r+b") as f:
         f.write(b"UBI#" + bytes(60) + b"VOLS:ubootenv,ubootenv2,factory,recovery,fit,rootfs_data\0")
+        # ubiformat also wipes the stock system UBI further in
+        f.seek(0x7F40000)
+        f.write(b"\xff" * 0x20000)
     open(path("installed"), "w").write(sha(tmpfile(files[2])))
     print("[xr1710g] ubiformat /dev/mtd2 (439 MiB)\n[xr1710g] read-back check")
     print("XR_INSTALL_OK")

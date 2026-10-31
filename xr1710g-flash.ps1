@@ -38,12 +38,18 @@
 .PARAMETER BackupDir
     Install/Backup: where to put the backup (default backup\<date-time>).
     Restore: folder with an earlier backup.
+.PARAMETER StockDump
+    Restore: a stock firmware dump - a folder with mtd5_tclinux.bin (and
+    mtd8_tclinux_slave.bin), or a 64 MiB tclinux.bin bank. The stock image is built
+    from its banks plus the stock system UBI of -BackupDir; vendor (MACs, Wi-Fi
+    calibration) stays the router's own. Needed because backups taken by this script
+    do not contain the stock firmware banks.
 .EXAMPLE
     .\xr1710g-flash.ps1 -ComPort COM5 -Loader http
 .EXAMPLE
     .\xr1710g-flash.ps1 -Mode Backup -Lang ru
 .EXAMPLE
-    .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
+    .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000 -StockDump '..\XR1710G Stock Dump'
 .EXAMPLE
     .\xr1710g-flash.ps1 -Mode Loader -Loader openwrt
 #>
@@ -58,6 +64,7 @@ param(
     [string]$ComPort = '',
     [string]$Firmware = '',
     [string]$BackupDir = '',
+    [string]$StockDump = '',
     [string]$PcIp = '192.168.1.254',
     [string]$UbootIp = '192.168.1.2',
     [string]$RouterIp = '192.168.1.1',
@@ -787,6 +794,93 @@ function Dismount-Ubi {
     Info (T 'UBI detached from the ubi partition' 'UBI отключён от раздела ubi')
 }
 
+# Stock layout: two firmware banks (tclinux, tclinux_slave) of 64 MiB at 0x600000 and 0x4600000,
+# then the stock "system" UBI from 0x8600000 to the BMT pool. The "chainloader" slot is the
+# first 1 MiB of bank 1, the "ubi" area (mtd2) covers the rest. Backups taken by this script
+# miss the banks (the OpenWrt U-Boot erased them while attaching UBI before the dump), but they
+# keep the stock UBI with the router's own settings; MACs and Wi-Fi calibration are in vendor,
+# which Restore never writes. So the stock image is rebuilt from a stock dump's banks plus the
+# system UBI of the backup.
+$StockBank = 0x4000000
+$StockSystemInUbi = 0x7F00000   # 0x8600000 - 0x700000
+
+# Big-endian 32-bit value (-shl on a [byte] stays a byte in PowerShell, so no shifts here)
+function Get-Be32([byte[]]$b, [int]$o) { [uint32]((([long]$b[$o] * 256 + $b[$o + 1]) * 256 + $b[$o + 2]) * 256 + $b[$o + 3]) }
+
+function Get-UbiVolumeNames([IO.FileStream]$fs, [long]$start, [long]$len) {
+    # Names from the UBI volume table (internal volume 0x7fffefff), PEB by PEB.
+    $names = @()
+    $hdr = [byte[]]::new(0x1000)
+    for ($o = $start; $o -lt $start + $len -and $names.Count -eq 0; $o += 0x20000) {
+        $fs.Position = $o
+        if ($fs.Read($hdr, 0, 0x1000) -ne 0x1000) { break }
+        if ([Text.Encoding]::ASCII.GetString($hdr, 0, 4) -ne 'UBI#') { continue }
+        $vid = Get-Be32 $hdr 16
+        $data = Get-Be32 $hdr 20
+        if ($vid -le 0 -or $vid -gt 0xF00 -or [Text.Encoding]::ASCII.GetString($hdr, $vid, 4) -ne 'UBI!') { continue }
+        if ((Get-Be32 $hdr ($vid + 8)) -ne 0x7FFFEFFF) { continue }
+        $tbl = [byte[]]::new(128 * 172)
+        $fs.Position = $o + $data
+        [void]$fs.Read($tbl, 0, $tbl.Length)
+        for ($r = 0; $r -lt 128; $r++) {
+            $b = $r * 172
+            # record: reserved_pebs, alignment, data_pad (3 x be32), vol_type, upd_marker, name_len (be16), name
+            $n = [int]$tbl[$b + 14] * 256 + $tbl[$b + 15]
+            if ($n -gt 0 -and $n -le 127) { $names += [Text.Encoding]::ASCII.GetString($tbl, $b + 16, $n) }
+        }
+    }
+    return , $names
+}
+
+function New-StockImage([string]$dump, [string]$backupUbi, [string]$outDir) {
+    if (Test-Path -LiteralPath $dump -PathType Container) {
+        $b1 = @('mtd5_tclinux.bin', 'tclinux.bin') | ForEach-Object { Join-Path $dump $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        $b2 = @('mtd8_tclinux_slave.bin', 'tclinux_slave.bin') | ForEach-Object { Join-Path $dump $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    } else { $b1 = $dump; $b2 = $null }
+    if (-not $b1) { Fail (T "$dump has no mtd5_tclinux.bin / tclinux.bin" "в $dump нет mtd5_tclinux.bin / tclinux.bin") }
+    if (-not $b2) { $b2 = $b1 }
+    foreach ($b in @($b1, $b2)) {
+        if ((Get-Item -LiteralPath $b).Length -ne $StockBank) { Fail (T "$b is not a 64 MiB stock bank" "$b - не стоковый банк на 64 МиБ") }
+        $h = [byte[]]::new(0x2010)
+        $fs = [IO.File]::OpenRead($b); try { [void]$fs.Read($h, 0, $h.Length) } finally { $fs.Close() }
+        $fip = [BitConverter]::ToString($h, 0, 8)
+        if ($fip -ne '01-00-64-AA-78-56-34-12' -or [Text.Encoding]::ASCII.GetString($h, 0x2000, 4) -ne 'HDR2') {
+            Fail (T "$b does not start with the stock FIP + tclinux (HDR2) image" "$b не начинается со стокового FIP + образа tclinux (HDR2)")
+        }
+    }
+    $fs = [IO.File]::OpenRead($backupUbi)
+    try {
+        if ($fs.Length -ne 0x1B700000) { Fail (T "$backupUbi has the wrong size" "$backupUbi неверного размера") }
+        $vols = Get-UbiVolumeNames $fs $StockSystemInUbi ($fs.Length - $StockSystemInUbi)
+    } finally { $fs.Close() }
+    if ($vols -notcontains 'rootfs_data' -or ($vols | Where-Object { $_ -in 'fit', 'ubootenv', 'factory' })) {
+        Fail ((T 'the backup has no stock system UBI at 0x8600000 (volumes: {0}) - take the backup of a router that was on the stock firmware' 'в копии нет стокового UBI system на 0x8600000 (тома: {0}) - нужна копия, снятая с роутера на стоке') -f ($vols -join ', '))
+    }
+    Info ((T 'stock system UBI from the backup, volumes: {0}' 'стоковый UBI system из копии, тома: {0}') -f ($vols -join ', '))
+    $slot = Join-Path $outDir 'stock-chainloader.bin'
+    $ubi = Join-Path $outDir 'stock-ubi.bin'
+    $buf = [byte[]]::new(0x100000)
+    function Copy-Range([IO.Stream]$src, [long]$from, [long]$len, [IO.Stream]$dst) {
+        $src.Position = $from
+        while ($len -gt 0) {
+            $n = $src.Read($buf, 0, [Math]::Min($buf.Length, $len))
+            if ($n -le 0) { Fail 'short read' }
+            $dst.Write($buf, 0, $n); $len -= $n
+        }
+    }
+    $s1 = [IO.File]::OpenRead($b1); $s2 = [IO.File]::OpenRead($b2); $sb = [IO.File]::OpenRead($backupUbi)
+    $os = [IO.File]::Create($slot); $ou = [IO.File]::Create($ubi)
+    try {
+        Copy-Range $s1 0 0x100000 $os
+        Copy-Range $s1 0x100000 ($StockBank - 0x100000) $ou
+        Copy-Range $s2 0 $StockBank $ou
+        Copy-Range $sb $StockSystemInUbi ($sb.Length - $StockSystemInUbi) $ou
+    } finally { $s1.Close(); $s2.Close(); $sb.Close(); $os.Close(); $ou.Close() }
+    if ((Get-Item -LiteralPath $ubi).Length -ne 0x1B700000) { Fail 'stock-ubi.bin has the wrong size' }
+    Info (T "stock image built from $b1 + $(Split-Path $b2 -Leaf) + the backup's system UBI" "образ стока собран из $b1 + $(Split-Path $b2 -Leaf) + UBI system из копии")
+    return @{ Slot = $slot; Ubi = $ubi }
+}
+
 function Save-Flash([string]$dir) {
     Say (T "Backing up the whole flash to $dir" "Снимаю копию всего флеша в $dir")
     $info = (Invoke-Ssh ('cat /proc/mtd; echo; cat /tmp/sysinfo/board_name; uname -a; ' +
@@ -1086,6 +1180,16 @@ if (-not $Lang) {
 }
 $script:Lang = $Lang
 
+# Relative paths would point elsewhere after the elevated relaunch (it starts in System32).
+foreach ($k in 'BackupDir', 'StockDump', 'Firmware') {
+    $v = Get-Variable -Name $k -ValueOnly
+    if ($v -and (Test-Path -LiteralPath $v)) {
+        $v = (Resolve-Path -LiteralPath $v).Path
+        Set-Variable -Name $k -Value $v
+        $PSBoundParameters[$k] = $v
+    }
+}
+
 if (-not $SkipNetworkSetup -and -not (Test-Admin)) {
     Write-Host (T 'Administrator rights are needed (adapter address and a firewall rule for TFTP). Restarting...' 'Нужны права администратора (адрес на адаптере и правило брандмауэра для TFTP). Перезапуск...') -ForegroundColor Yellow
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', (ConvertTo-Arg $PSCommandPath))
@@ -1152,6 +1256,16 @@ layout must already be installed (Install got as far as writing the loader).
         if (-not $script:RestoreBootcmd) { Fail (T 'stock-uboot-env.txt has no bootcmd' 'в stock-uboot-env.txt нет bootcmd') }
         $script:RestoreBootcmd = $script:RestoreBootcmd.Substring(8)
         Info (T "bootcmd will be restored to '$($script:RestoreBootcmd)'" "будет восстановлен bootcmd='$($script:RestoreBootcmd)'")
+        if ($StockDump) {
+            New-Item -ItemType Directory -Force -Path $Session | Out-Null
+            $img = New-StockImage $StockDump (Join-Path $BackupDir 'mtd2-ubi.bin') $Session
+            $script:RestoreSlot = $img.Slot
+            $script:RestoreUbi = $img.Ubi
+        } else {
+            $script:RestoreSlot = Join-Path $BackupDir 'mtd1-chainloader.bin'
+            $script:RestoreUbi = Join-Path $BackupDir 'mtd2-ubi.bin'
+            Warn (T 'no -StockDump: backups taken by this script lack the stock firmware banks, the stock firmware will not boot after this Restore' 'без -StockDump: в копиях этого скрипта нет банков стоковой прошивки, после такого Restore сток не загрузится')
+        }
         Confirm-Step (T 'The stock firmware will be written back over OpenWrt.' 'Сток будет записан обратно поверх OpenWrt.')
     }
 
@@ -1201,19 +1315,20 @@ Wiring:
         Test-MtdLayout (Invoke-Ssh 'cat /proc/mtd').Out
         Dismount-Ubi
         Say (T 'Writing the ubi area from the backup (mtd write)' 'Запись области ubi из копии (mtd write)')
-        $r = Invoke-Ssh 'mtd write - ubi 2>&1' 3600 -In (Join-Path $BackupDir 'mtd2-ubi.bin') -Echo -NoFail
+        $r = Invoke-Ssh 'mtd write - ubi 2>&1' 3600 -In $script:RestoreUbi -Echo -NoFail
         if ($r.ExitCode -ne 0) { Fail (T 'mtd write failed' 'mtd write завершился с ошибкой') }
-        $want = Get-Sha256 (Join-Path $BackupDir 'mtd2-ubi.bin')
+        $want = Get-Sha256 $script:RestoreUbi
         $got = (Invoke-Ssh 'sha256sum /dev/mtd2' 600).Out.Split(' ')[0].Trim()
         if ($got -ne $want) { Warn (T 'reading ubi back does not match the backup byte for byte (happens with new bad blocks)' 'чтение ubi не совпало с копией побайтно (так бывает при новых плохих блоках)') }
         else { Info (T 'the ubi area matches the backup' 'область ubi совпадает с копией') }
         $m = Restart-ToStock
         Enter-StockUboot (T 'Rebooting into the stock U-Boot' 'Перезагрузка в стоковый U-Boot') $m
-        Write-Slot (Join-Path $BackupDir 'mtd1-chainloader.bin') (T 'the stock start of tclinux' 'стоковое начало tclinux')
+        Write-Slot $script:RestoreSlot (T 'the stock start of tclinux' 'стоковое начало tclinux')
         if ((Get-UbootVar 'bootcmd') -cne $script:RestoreBootcmd) {
             Set-UbootVar 'bootcmd' $script:RestoreBootcmd
             Invoke-Uboot 'saveenv' 60 | Out-Null
         }
+        if ($StockDump) { Remove-Item -LiteralPath $script:RestoreSlot, $script:RestoreUbi -ErrorAction SilentlyContinue }
         Say (T 'Done: the stock firmware is back. The router is rebooting into it.' 'Готово: сток записан обратно. Роутер перезагружается в стоковую прошивку.')
         $script:C.Send("reset`r")
         Start-Sleep -Seconds 5

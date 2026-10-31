@@ -50,6 +50,20 @@ def init_state():
         # the stock firmware 5.1.1.12 keeps its own UBI here
         f.write(b"UBI#" + bytes(60) + b"VOLS:rootfs_data,config,log\0" + rnd.randbytes(1 << 20))
         f.truncate(0x1B700000)
+        # the stock "system" UBI starts at 0x8600000 (mtd2 + 0x7f00000); one PEB of its
+        # volume table (internal volume 0x7fffefff) is enough for the restore checks
+        peb = bytearray(b"\xff" * 0x20000)
+        peb[0:4] = b"UBI#"
+        peb[16:24] = struct.pack(">II", 0x800, 0x1000)
+        peb[0x800:0x804] = b"UBI!"
+        peb[0x808:0x80C] = struct.pack(">I", 0x7FFFEFFF)
+        tbl = bytearray(128 * 172)
+        for i, name in enumerate((b"rootfs_data", b"config", b"log")):
+            tbl[i * 172:i * 172 + 16] = struct.pack(">IIIBBH", 265, 1, 0, 1, 0, len(name))
+            tbl[i * 172 + 16:i * 172 + 16 + len(name)] = name
+        peb[0x1000:0x1000 + len(tbl)] = tbl
+        f.seek(0x7F00000 + 0x40000)
+        f.write(peb)
     with open(path("mtd3.bin"), "wb") as f:
         f.truncate(0x4200000)
     json.dump(STOCK_ENV, open(path("env.json"), "w"))

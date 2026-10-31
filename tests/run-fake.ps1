@@ -113,6 +113,42 @@ Check 'restore: ubi back to stock' ((Get-FileHash "$s\mtd2.bin").Hash -eq (Get-F
 Check 'restore: bootcmd back to stock' ((Get-Env $s).bootcmd -eq 'flash read 0x602100 0x4000000 $loadaddr; bootm')
 Stop-Process $r -ErrorAction SilentlyContinue
 
+# 5b. Restore with -StockDump: the banks come from a stock dump, the system UBI from backup 3
+$dump = "$Work\stockdump"
+& $Py -c @"
+import os, random
+d = r'$dump'
+os.makedirs(d, exist_ok=True)
+for name, seed in (('mtd5_tclinux.bin', 1), ('mtd8_tclinux_slave.bin', 2)):
+    b = bytearray(random.Random(seed).randbytes(0x4000000))
+    b[0:8] = bytes.fromhex('010064aa78563412')
+    b[0x2000:0x2004] = b'HDR2'
+    open(os.path.join(d, name), 'wb').write(b)
+"@
+$r = Start-Router $s 7008
+$rc = Invoke-Flash 'restore stockdump' $s 7008 @('-Mode', 'Restore', '-BackupDir', "$Work\bk3", '-StockDump', $dump)
+Check 'stockdump: exit code 0' ($rc -eq 0)
+$seg = & $Py -c @"
+d, s, b = r'$dump', r'$s', r'$Work\bk3'
+bank1 = open(d + r'\mtd5_tclinux.bin', 'rb').read()
+bank2 = open(d + r'\mtd8_tclinux_slave.bin', 'rb').read()
+mtd1 = open(s + r'\mtd1.bin', 'rb').read()
+mtd2 = open(s + r'\mtd2.bin', 'rb').read()
+bk = open(b + r'\mtd2-ubi.bin', 'rb').read()
+print(int(mtd1 == bank1[:0x100000]), int(mtd2[:0x3f00000] == bank1[0x100000:]),
+      int(mtd2[0x3f00000:0x7f00000] == bank2), int(mtd2[0x7f00000:] == bk[0x7f00000:]))
+"@
+Check 'stockdump: slot = first 1 MiB of bank 1' ($seg -match '^1 ')
+Check 'stockdump: ubi = rest of bank 1 + bank 2' ($seg -match '^1 1 1 ')
+Check 'stockdump: system UBI from the backup' ($seg -match '^1 1 1 1$')
+Stop-Process $r -ErrorAction SilentlyContinue
+
+# 5c. -StockDump with a backup of a flashed router (no stock system UBI) is refused
+$r = Start-Router $s 7009
+$rc = Invoke-Flash 'restore stockdump flashed' $s 7009 @('-Mode', 'Restore', '-BackupDir', "$Work\bk7", '-StockDump', $dump)
+Check 'stockdump: flashed backup refused' ($rc -ne 0 -and (Get-Content "$Work\bk7\flash.log" -Raw) -match 'no stock system UBI')
+Stop-Process $r -ErrorAction SilentlyContinue
+
 # 6. A sysupgrade with the UBI 1.0 layout is refused before anything runs
 $bad = "$Work\ubi10.itb"
 $b = [IO.File]::ReadAllBytes("$Root\firmware\openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb")
