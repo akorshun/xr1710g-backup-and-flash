@@ -91,6 +91,9 @@ $Files = @{
     Recovery     = 'openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb'
     Sysupgrade   = 'openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb'
     Stock        = 'xr1710g-stock-5.1.1.12-tclinux.bin'
+    # the OpenWrt U-Boot for the RAM boot only: its "ubi" partition label is "ubz", so it never
+    # attaches UBI (see tools/make-ram-uboot.sh)
+    RamUboot     = 'xr1710g-ram-uboot.itb'
 }
 
 # Partitions OpenWrt sees on the XR1710G with the UBI 2.0 layout
@@ -655,9 +658,13 @@ function Invoke-TftpLoad([string]$path, [string]$addr, [int]$tries = 6) {
 # From the stock U-Boot to the OpenWrt U-Boot and initramfs, all in RAM.
 function Enter-RamLinux {
     Say (T 'Loading the OpenWrt U-Boot into RAM (flash untouched)' 'Загрузка U-Boot OpenWrt в ОЗУ (флеш не трогается)')
+    $stockPrompt = $script:Prompt
     Invoke-Uboot "setenv ipaddr $UbootIp" | Out-Null
     Invoke-Uboot "setenv serverip $PcIp" | Out-Null
-    Invoke-TftpLoad (Join-Path $FwDir $Files.OpenWrtUboot) '0x89000000' | Out-Null
+    # Not the chainload-uboot.itb that goes to flash: that one loads its environment from
+    # UBI, and attaching UBI on a stock router erases the firmware banks (0x700000-0x8600000)
+    # or crashes the loader ("Synchronous Abort", both seen on hardware).
+    Invoke-TftpLoad (Join-Path $FwDir $Files.RamUboot) '0x89000000' | Out-Null
     $m = $script:C.Mark()
     $script:C.Send("bootm 0x89000000`r")
     $pos = $script:C.WaitFor('U-Boot 20(1[5-9]|[2-9]\d)', $m, (Scale 60))
@@ -674,6 +681,9 @@ function Enter-RamLinux {
     }
     if (-not $ok) { Fail (T 'could not reach the OpenWrt U-Boot command line' 'не удалось попасть в командную строку U-Boot OpenWrt') }
     Learn-Prompt
+    if ($script:Prompt -eq $stockPrompt) {
+        Fail (T 'the OpenWrt U-Boot reset back to the stock loader instead of starting (see serial.log)' 'U-Boot OpenWrt не запустился и роутер вернулся в стоковый загрузчик (см. serial.log)')
+    }
     Info (T "OpenWrt U-Boot in RAM, prompt '$($script:Prompt)'" "U-Boot OpenWrt в ОЗУ, приглашение '$($script:Prompt)'")
 
     Say (T 'Loading the OpenWrt initramfs into RAM' 'Загрузка initramfs OpenWrt в ОЗУ')

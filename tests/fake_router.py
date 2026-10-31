@@ -360,7 +360,8 @@ class Router:
             if img[:4] == b"\xd0\x0d\xfe\xed" and b"Linux-u-boot" in img:
                 self.out("## Loading kernel from FIT Image at 89000000 ...\nStarting kernel ...\n\n")
                 self.out("U-Boot 2026.01-OpenWrt (Oct 27 2026)\n\n")
-                return self.ram_uboot_menu()
+                # the RAM-boot U-Boot has its "ubi" partition renamed and never attaches UBI
+                return self.ram_uboot_menu(attach_ubi=b"ubz\0" not in img)
             self.out("Wrong Image Format for bootm command\n")
         elif c == "reset":
             self.out("resetting ...\n")
@@ -370,11 +371,14 @@ class Router:
         return None
 
     # -- OpenWrt U-Boot in RAM ---------------------------------------------
-    def ram_uboot_menu(self):
+    def ram_uboot_menu(self, attach_ubi=True):
         set_mode("ram-uboot")
         self.env = {"loadaddr": "0x81800000", "initaddr": "0x89000000", "bootconf": "config-1",
                     "ipaddr": "192.168.1.1", "serverip": "192.168.1.10"}
-        self.out("Loading Environment from UBI... UBI error: too many corrupted PEBs, refusing\n")
+        if attach_ubi:
+            self.out("Loading Environment from UBI... UBI error: too many corrupted PEBs, refusing\n")
+        else:
+            self.out("Loading Environment from UBI... Partition ubi not found!\n")
         self.out("*** Warning - bad CRC, using default environment\n\n")
         self.out("  *** U-Boot Boot Menu ***\n\n     1. Run default boot command.\n     0. U-Boot console\n")
         t = time.time()

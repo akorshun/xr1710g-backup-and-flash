@@ -63,6 +63,9 @@ $log = Get-Content "$Work\bk1\flash.log" -Raw -Encoding UTF8
 Check 'backup: stock UBI recognised' ($log -match 'rootfs_data, config, log')
 Check 'backup: no "flashed before" warning' ($log -notmatch '\u041d\u0415 \u0441\u0442\u043e\u043a\u0430')
 Check 'backup: stock UBI detached before the dump' ($log -match 'ubidetach -m 2')
+# the RAM U-Boot must not attach UBI (it would erase the stock firmware banks)
+$ser = Get-Content "$Work\bk1\serial.log" -Raw
+Check 'backup: RAM U-Boot left UBI alone' ($ser -match 'Partition ubi not found' -and $ser -notmatch 'corrupted PEBs')
 Stop-Process $r -ErrorAction SilentlyContinue
 
 # 2. Install with http-uboot: stock bootcmd stays, slot = slot.bin
