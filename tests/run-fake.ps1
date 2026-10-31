@@ -105,7 +105,7 @@ Stop-Process $r -ErrorAction SilentlyContinue
 
 # 5. Restore the stock from backup 3 onto the router of test 3
 $r = Start-Router $s 7004
-$rc = Invoke-Flash 'restore' $s 7004 @('-Mode', 'Restore', '-BackupDir', "$Work\bk3")
+$rc = Invoke-Flash 'restore' $s 7004 @('-Mode', 'Restore', '-BackupDir', "$Work\bk3", '-StockDump', 'none')
 Check 'restore: exit code 0' ($rc -eq 0)
 Check 'restore: attached UBI detached first' ((Get-Content "$Work\bk3\flash.log" -Raw) -match 'ubidetach -m 2')
 Check 'restore: slot back to stock' ((Get-FileHash "$s\mtd1.bin").Hash -eq (Get-FileHash "$Work\bk3\mtd1-chainloader.bin").Hash)
@@ -141,6 +141,23 @@ print(int(mtd1 == bank1[:0x100000]), int(mtd2[:0x3f00000] == bank1[0x100000:]),
 Check 'stockdump: slot = first 1 MiB of bank 1' ($seg -match '^1 ')
 Check 'stockdump: ubi = rest of bank 1 + bank 2' ($seg -match '^1 1 1 ')
 Check 'stockdump: system UBI from the backup' ($seg -match '^1 1 1 1$')
+Stop-Process $r -ErrorAction SilentlyContinue
+
+# 5d. Restore without -StockDump uses the stock image shipped in firmware\, padded to 64 MiB banks
+$r = Start-Router $s 7010
+$rc = Invoke-Flash 'restore default stock' $s 7010 @('-Mode', 'Restore', '-BackupDir', "$Work\bk3")
+Check 'default stock: exit code 0' ($rc -eq 0)
+$seg = & $Py -c @"
+img = open(r'$Root\firmware\xr1710g-stock-5.1.1.12-tclinux.bin', 'rb').read()
+bank = img + b'\xff' * (0x4000000 - len(img))
+s, b = r'$s', r'$Work\bk3'
+mtd1 = open(s + r'\mtd1.bin', 'rb').read()
+mtd2 = open(s + r'\mtd2.bin', 'rb').read()
+bk = open(b + r'\mtd2-ubi.bin', 'rb').read()
+print(int(mtd1 == bank[:0x100000] and mtd2[:0x3f00000] == bank[0x100000:] and
+          mtd2[0x3f00000:0x7f00000] == bank and mtd2[0x7f00000:] == bk[0x7f00000:]))
+"@
+Check 'default stock: firmware\ image in both banks, system UBI from the backup' ($seg -eq '1')
 Stop-Process $r -ErrorAction SilentlyContinue
 
 # 5c. -StockDump with a backup of a flashed router (no stock system UBI) is refused

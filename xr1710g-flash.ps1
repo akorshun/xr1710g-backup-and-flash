@@ -39,17 +39,18 @@
     Install/Backup: where to put the backup (default backup\<date-time>).
     Restore: folder with an earlier backup.
 .PARAMETER StockDump
-    Restore: a stock firmware dump - a folder with mtd5_tclinux.bin (and
-    mtd8_tclinux_slave.bin), or a 64 MiB tclinux.bin bank. The stock image is built
-    from its banks plus the stock system UBI of -BackupDir; vendor (MACs, Wi-Fi
-    calibration) stays the router's own. Needed because backups taken by this script
-    do not contain the stock firmware banks.
+    Restore: where the stock firmware banks come from. Default: the stock image in
+    firmware\ (XR1710G_fw_5.1.1.12). Or a stock dump - a folder with mtd5_tclinux.bin
+    (and mtd8_tclinux_slave.bin) - or a tclinux.bin bank. The image written is the banks
+    plus the stock system UBI of -BackupDir; vendor (MACs, Wi-Fi calibration) stays the
+    router's own. Needed because backups taken by this script do not contain the banks.
+    "none" writes the backup back as it is.
 .EXAMPLE
     .\xr1710g-flash.ps1 -ComPort COM5 -Loader http
 .EXAMPLE
     .\xr1710g-flash.ps1 -Mode Backup -Lang ru
 .EXAMPLE
-    .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000 -StockDump '..\XR1710G Stock Dump'
+    .\xr1710g-flash.ps1 -Mode Restore -BackupDir .\backup\20261028-150000
 .EXAMPLE
     .\xr1710g-flash.ps1 -Mode Loader -Loader openwrt
 #>
@@ -89,6 +90,7 @@ $Files = @{
     Backup       = 'xr1710g-backup-initramfs.itb'
     Recovery     = 'openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb'
     Sysupgrade   = 'openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb'
+    Stock        = 'xr1710g-stock-5.1.1.12-tclinux.bin'
 }
 
 # Partitions OpenWrt sees on the XR1710G with the UBI 2.0 layout
@@ -840,7 +842,9 @@ function New-StockImage([string]$dump, [string]$backupUbi, [string]$outDir) {
     if (-not $b1) { Fail (T "$dump has no mtd5_tclinux.bin / tclinux.bin" "в $dump нет mtd5_tclinux.bin / tclinux.bin") }
     if (-not $b2) { $b2 = $b1 }
     foreach ($b in @($b1, $b2)) {
-        if ((Get-Item -LiteralPath $b).Length -ne $StockBank) { Fail (T "$b is not a 64 MiB stock bank" "$b - не стоковый банк на 64 МиБ") }
+        # a full 64 MiB bank, or just the image (firmware\xr1710g-stock-*.bin), padded with 0xff
+        $len = (Get-Item -LiteralPath $b).Length
+        if ($len -lt 0x100000 -or $len -gt $StockBank) { Fail (T "$b is not a stock bank (1 to 64 MiB)" "$b - не стоковый банк (от 1 до 64 МиБ)") }
         $h = [byte[]]::new(0x2010)
         $fs = [IO.File]::OpenRead($b); try { [void]$fs.Read($h, 0, $h.Length) } finally { $fs.Close() }
         $fip = [BitConverter]::ToString($h, 0, 8)
@@ -860,12 +864,15 @@ function New-StockImage([string]$dump, [string]$backupUbi, [string]$outDir) {
     $slot = Join-Path $outDir 'stock-chainloader.bin'
     $ubi = Join-Path $outDir 'stock-ubi.bin'
     $buf = [byte[]]::new(0x100000)
+    $ff = [byte[]]::new(0x100000)
+    for ($i = 0; $i -lt $ff.Length; $i++) { $ff[$i] = 0xFF }
+    # copies $len bytes from $from; past the end of $src it writes 0xff (erased flash)
     function Copy-Range([IO.Stream]$src, [long]$from, [long]$len, [IO.Stream]$dst) {
-        $src.Position = $from
+        $src.Position = [Math]::Min($from, $src.Length)
         while ($len -gt 0) {
             $n = $src.Read($buf, 0, [Math]::Min($buf.Length, $len))
-            if ($n -le 0) { Fail 'short read' }
-            $dst.Write($buf, 0, $n); $len -= $n
+            if ($n -gt 0) { $dst.Write($buf, 0, $n); $len -= $n }
+            else { $n = [Math]::Min($ff.Length, $len); $dst.Write($ff, 0, $n); $len -= $n }
         }
     }
     $s1 = [IO.File]::OpenRead($b1); $s2 = [IO.File]::OpenRead($b2); $sb = [IO.File]::OpenRead($backupUbi)
@@ -1256,6 +1263,10 @@ layout must already be installed (Install got as far as writing the loader).
         if (-not $script:RestoreBootcmd) { Fail (T 'stock-uboot-env.txt has no bootcmd' 'в stock-uboot-env.txt нет bootcmd') }
         $script:RestoreBootcmd = $script:RestoreBootcmd.Substring(8)
         Info (T "bootcmd will be restored to '$($script:RestoreBootcmd)'" "будет восстановлен bootcmd='$($script:RestoreBootcmd)'")
+        # The stock image shipped in firmware\ unless another dump is given; "-StockDump none"
+        # writes the backup back as it is (for a backup that does hold the firmware banks).
+        if (-not $StockDump) { $StockDump = Join-Path $FwDir $Files.Stock }
+        if ($StockDump -eq 'none') { $StockDump = '' }
         if ($StockDump) {
             New-Item -ItemType Directory -Force -Path $Session | Out-Null
             $img = New-StockImage $StockDump (Join-Path $BackupDir 'mtd2-ubi.bin') $Session
@@ -1264,7 +1275,7 @@ layout must already be installed (Install got as far as writing the loader).
         } else {
             $script:RestoreSlot = Join-Path $BackupDir 'mtd1-chainloader.bin'
             $script:RestoreUbi = Join-Path $BackupDir 'mtd2-ubi.bin'
-            Warn (T 'no -StockDump: backups taken by this script lack the stock firmware banks, the stock firmware will not boot after this Restore' 'без -StockDump: в копиях этого скрипта нет банков стоковой прошивки, после такого Restore сток не загрузится')
+            Warn (T '-StockDump none: the backup is written as it is; backups taken by this script lack the stock firmware banks, and the stock firmware will not boot from them' '-StockDump none: копия пишется как есть; в копиях этого скрипта нет банков стоковой прошивки, и сток с них не загрузится')
         }
         Confirm-Step (T 'The stock firmware will be written back over OpenWrt.' 'Сток будет записан обратно поверх OpenWrt.')
     }
