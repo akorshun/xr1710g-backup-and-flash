@@ -26,7 +26,7 @@ def fail(msg, rc=255):
 args = sys.argv[1:]
 cmd = args[-1]
 mode = open(path("mode")).read()
-if mode != "initramfs":
+if mode not in ("initramfs", "recovery"):
     fail("ssh: connect to host 192.168.1.1 port 22: Connection timed out")
 if not os.path.exists(path("authorized")):
     fail("root@192.168.1.1: Permission denied (publickey).")
@@ -88,6 +88,16 @@ elif cmd.startswith("cat > /tmp/xr/"):
         f.write(sys.stdin.buffer.read())
 elif cmd.startswith("sha256sum /tmp/xr/"):
     print("%s  %s" % (sha(tmpfile(cmd[10:])), cmd[10:]))
+elif "ubimkvol /dev/ubi0 -N recovery" in cmd:
+    # Install: the recovery volume in the recovery system, before sysupgrade
+    if mode != "recovery" or b"VOLS:ubootenv,ubootenv2,factory" not in open(path("mtd2.bin"), "rb").read(128):
+        fail("ubimkvol: error!: UBI device 0 does not exist", 1)
+    if not os.path.exists(tmpfile("recovery.itb")):
+        fail("ubiupdatevol: error!: cannot open /tmp/xr/recovery.itb", 1)
+    open(path("recovery_vol"), "w").write(sha(tmpfile("recovery.itb")))
+    print("XR_RECOVERY_OK")
+    for v in ("ubootenv", "ubootenv2", "factory", "recovery"):
+        print("Name:        " + v)
 elif cmd.startswith("sh /tmp/xr/install-ubi.sh "):
     files = cmd.split()[2:5]
     for f in files:

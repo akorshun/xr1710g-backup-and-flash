@@ -10,6 +10,7 @@ mtd0..mtd3.bin, shared with fake_ssh.py.
 
   fake_router.py STATE PORT TFTP_PORT [--init]
 """
+import hashlib
 import json
 import os
 import random
@@ -68,7 +69,7 @@ def init_state():
         f.truncate(0x4200000)
     json.dump(STOCK_ENV, open(path("env.json"), "w"))
     set_mode("off")
-    for f in ("reboot", "authorized", "installed", "detached"):
+    for f in ("reboot", "authorized", "installed", "detached", "recovery_vol"):
         if os.path.exists(path(f)):
             os.remove(path(f))
 
@@ -201,6 +202,14 @@ class Router:
         return b"\0" * ln
 
     def flash_rw(self, off, ln, data=None):
+        if off == 0x700000 and ln == 0x1B700000 and data is not None:
+            # "flash erase" of the whole ubi area (Install): it is erased flash afterwards
+            with open(path("mtd2.bin"), "r+b") as f:
+                for _ in range(ln >> 20):
+                    f.write(b"\xff" * (1 << 20))
+            if os.path.exists(path("installed")):
+                os.remove(path("installed"))
+            return None
         if not (0x600000 <= off and off + ln <= 0x700000):
             raise ValueError("flash access outside the chainloader slot: %#x" % off)
         with open(path("mtd1.bin"), "r+b") as f:
@@ -275,6 +284,26 @@ class Router:
 
     def flash_uboot(self, banner):
         self.out("\n" + banner + "\n\n")
+        head = open(path("mtd2.bin"), "rb").read(128)
+        if "OpenWrt" in banner and not os.path.exists(path("installed")) and (
+                head[:4] == b"\xff\xff\xff\xff" or b"VOLS:ubootenv,ubootenv2,factory\0" in head):
+            # the chainloader from r17 on: build UBI on erased flash, then, with nothing
+            # to boot, load the recovery image over TFTP from 192.168.1.254 until it comes
+            if head[:4] == b"\xff\xff\xff\xff":
+                with open(path("mtd2.bin"), "r+b") as f:
+                    f.write(b"UBI#" + bytes(60) + b"VOLS:ubootenv,ubootenv2,factory\0")
+                self.out("UBI: creating ubootenv, ubootenv2, factory\nSaving Environment to UBI... OK\n")
+            name = "openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb"
+            for _ in range(20):
+                self.out("Using eth0 device\nTFTP from server 192.168.1.254; our IP address is 192.168.1.1\n"
+                         "Filename '%s'.\n" % name)
+                data = self.tftp(name)
+                if data and data[:4] == b"\xd0\x0d\xfe\xed":
+                    self.out("Bytes transferred = %d\n## Loading kernel from FIT Image\n" % len(data))
+                    return self.linux("recovery")
+                self.out("TFTP error: file not found\n")
+                time.sleep(1)
+            return self.ram_uboot_shell()
         if not os.path.exists(path("installed")):
             self.out("UBI error: no valid UBI volumes\n")
             return self.ram_uboot_shell()
@@ -439,12 +468,27 @@ class Router:
                 # poweroff: the tester "cycles power" at once, so it boots like a reboot
                 open(path("reboot"), "w").write("1")
                 break
-            if "authorized_keys" in line and kind == "initramfs":
+            if "authorized_keys" in line and kind in ("initramfs", "recovery"):
                 open(path("authorized"), "w").write(line)
+            if kind == "recovery" and line.strip().startswith("sysupgrade -n "):
+                img = path("tmp", os.path.basename(line.split()[-1]))
+                if not os.path.exists(img) or not os.path.exists(path("recovery_vol")):
+                    self.out("TEST FAILURE: sysupgrade without the image or the recovery volume\n")
+                    continue
+                with open(path("mtd2.bin"), "r+b") as f:
+                    f.write(b"UBI#" + bytes(60) + b"VOLS:ubootenv,ubootenv2,factory,recovery,fit,rootfs_data\0")
+                h = hashlib.sha256(open(img, "rb").read()).hexdigest()
+                open(path("installed"), "w").write(h)
+                self.out("Commencing upgrade. Closing all shell sessions.\nUpgrade completed\n")
+                open(path("reboot"), "w").write("1")
+                break
             if 'XR_""RC=$?' in line:
                 self.out("XR_RC=0\n")
             elif line.startswith('echo XR_""BOARD='):
                 self.out("XR_BOARD=gemtek,xr1710g-ubi\n")
+            elif line.startswith('echo XR_""MAC='):
+                # factory built from the vendor partition by sysupgrade: DSD wan_mac
+                self.out("XR_MAC=02:11:22:33:44:50\n")
         os.remove(path("reboot"))
         for f in ("authorized", "detached"):
             if os.path.exists(path(f)):

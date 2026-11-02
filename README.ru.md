@@ -7,13 +7,19 @@
 
 1. останавливает стоковый загрузчик через UART и **снимает полную копию флеша**
    на ПК (все 512 МиБ со сверкой sha256), пока во флеш ещё ничего не записано;
-2. размечает флеш сразу под **UBI 2.0** (`ubi` = `0x700000 + 0x1b700000`, резерв
-   528 PEB под BMT вендорского загрузчика) и ставит OpenWrt;
-3. пишет в слот `chainloader` **выбранный загрузчик** — U-Boot с HTTP-рекавери
-   (YYH2913) или ванильный чейнлоадер U-Boot OpenWrt;
-4. перезагружает роутер и проверяет, что OpenWrt поднялся с флеша.
+2. пишет в слот `chainloader` чейнлоадер OpenWrt и стирает область `ubi`; чейнлоадер
+   сам размечает флеш под **UBI 2.0** (`ubi` = `0x700000 + 0x1b700000`, резерв
+   528 PEB под BMT вендорского загрузчика) и загружает систему рекавери OpenWrt
+   по TFTP с ПК;
+3. в этой системе рекавери создаёт том `recovery` и запускает `sysupgrade`, который
+   заполняет том `factory` из раздела vendor (калибровка Wi-Fi, MAC) и ставит
+   OpenWrt;
+4. проверяет, что OpenWrt поднялся с флеша с родными MAC роутера, а с
+   `-Loader http` в конце пишет в слот **http-uboot** (YYH2913).
 
-Отдельно есть режимы «только копия», «вернуть сток из копии» и «только загрузчик».
+Отдельно есть режимы «только копия», «вернуть сток из копии» и «только загрузчик»,
+а также прежняя установка (`-Mode InstallLegacy`, устаревшая), где UBI размечает
+сама временная система.
 Сообщения — на английском или русском: скрипт спрашивает при запуске (`-Lang en` /
 `-Lang ru` — без вопроса).
 
@@ -28,11 +34,17 @@
 > стоковым образом из `firmware/` — см. [Вернуть сток](#вернуть-сток).
 
 > [!NOTE]
+> **Установка через чейнлоадер** (`xr1710g-r17`/`r18`: стоковый U-Boot пишет
+> чейнлоадер и стирает `ubi`, чейнлоадер создаёт UBI и грузит систему рекавери по
+> TFTP, оттуда `sysupgrade`) проверена на железе вручную 02.11.2026 с
+> восстановленного стока. Скрипт делает те же шаги после копии; эта
+> последовательность проверена на эмуляторе (`tests/`), целиком на железе скриптом
+> ещё не прогонялась.
+>
 > **Проверено на железе (XR1710G, 28.10.2026):** копия стока, разметка UBI 2.0,
 > установка OpenWrt `xr1710g-r2` и загрузчик OpenWrt (`-Loader openwrt`) —
 > роутер загружается в OpenWrt, Ethernet и Wi-Fi (EEPROM из тома factory)
-> работают. Сейчас в `firmware/` лежит более новая сборка `xr1710g-r8`; её
-> рекавери по кнопке через TFTP скриптом на железе ещё не прогонялось.
+> работают (это установка, которая теперь осталась как `-Mode InstallLegacy`).
 > **31.10.2026** на одном роутере пройден весь круг: возврат стока из старой копии со
 > стоковым образом из `firmware/` → сток загрузился; Install со свежей полной копией
 > → OpenWrt загрузился с MAC этого роутера; Restore этой копии как есть → сток
@@ -80,14 +92,15 @@
 | Как войти в рекавери | кабель в порт **10GbE**, держать **reset** при включении, отпустить, когда индикатор сменит красный на «бегущий» | ПК `192.168.1.254/24` с TFTP-сервером в порту **1 Гбит** (lan3/lan4, не 10GbE); включить, нажать **reset через 1–2 с** (если держать при включении, SoC ждёт загрузку по UART) и держать до **синего** индикатора, около 15–20 с |
 | Нужен ли UART после установки | нет | нет (вместо браузера нужен TFTP-сервер) |
 | Сеть в загрузчике | 10GbE | гигабитные порты |
-| Пересоздание UBI | из веб-интерфейса, с выбором раскладки 2.0 / 1.5 / 1.0 и восстановлением factory из DSD | вручную из initramfs |
-| Окружение AXON | не меняется: слот «двухвходовый», работает со стоковым `bootcmd` | `bootcmd` меняется на `flash read 0x600000 0x100000 $loadaddr; bootm` (как в инструкции OpenWrt) |
-| Происхождение | бинарник из релиза автора, исходники в [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | собран из [akorshun/openwrt `xr1710g-r8`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r8) |
+| Пересоздание UBI | из веб-интерфейса, с выбором раскладки 2.0 / 1.5 / 1.0 и восстановлением factory из DSD | сам, на стёртой области `ubi` (ubootenv, ubootenv2, factory); `sysupgrade` заполняет factory из раздела vendor |
+| Окружение AXON | слот «двухвходовый», работает и со стоковым `bootcmd`, и с `bootcmd` OpenWrt (Install сначала ставит последний) | `bootcmd` меняется на `flash read 0x600000 0x100000 $loadaddr; bootm` (как в инструкции OpenWrt) |
+| Происхождение | бинарник из релиза автора, исходники в [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | собран из [akorshun/openwrt `xr1710g-r18`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r18) |
 
 Оба варианта загружают OpenWrt из тома `fit`, обновления ставятся обычным
 `sysupgrade`. Если сомневаетесь — берите **http-uboot**: для его рекавери
 нужен только браузер. Сменить загрузчик позже можно его же веб-страницей
-(http-uboot) или режимом `-Mode Loader`.
+(http-uboot) или режимом `-Mode Loader`. Install всегда размечает UBI чейнлоадером
+OpenWrt, а с `-Loader http` пишет http-uboot в слот, когда OpenWrt уже работает.
 
 ## Запуск
 
@@ -96,6 +109,7 @@
 
 ```powershell
 .\xr1710g-flash.ps1                              # установка, всё спросит
+.\xr1710g-flash.ps1 -Mode InstallLegacy         # прежняя установка (устаревшая)
 .\xr1710g-flash.ps1 -Lang ru                     # сообщения на русском без вопроса о языке
 .\xr1710g-flash.ps1 -ComPort COM5 -Loader http   # без вопросов о порте и загрузчике
 .\xr1710g-flash.ps1 -Mode Backup                 # только копия, флеш не трогается
@@ -121,8 +135,10 @@ powershell -ExecutionPolicy Bypass -File .\xr1710g-flash.ps1 -Mode Backup
 2. попросит **включить питание** роутера — сам прервёт автозагрузку;
 3. снимет копию (несколько минут), покажет серийный номер и MAC-адреса;
 4. **спросит подтверждение** (`YES`) перед первой записью во флеш;
-5. разметит UBI, поставит OpenWrt, перезагрузится, запишет загрузчик, ещё раз
-   перезагрузится и дождётся OpenWrt.
+5. запишет чейнлоадер OpenWrt, сотрёт область `ubi` и перезагрузит роутер;
+   чейнлоадер создаст UBI и загрузит систему рекавери с TFTP-сервера скрипта;
+   скрипт создаст том `recovery`, запустит `sysupgrade` и дождётся OpenWrt
+   (с `-Loader http` затем запишет http-uboot).
 
 Всего ~10–15 минут. Весь вывод консоли роутера пишется в `serial.log`, шаги
 скрипта — в `flash.log`, оба лежат в папке копии.
@@ -135,11 +151,21 @@ powershell -ExecutionPolicy Bypass -File .\xr1710g-flash.ps1 -Mode Backup
 | TFTP `xr1710g-ram-uboot.itb` в ОЗУ, `bootm` | AXON U-Boot | нет |
 | TFTP `xr1710g-backup-initramfs.itb` в ОЗУ, `bootm` | U-Boot OpenWrt в ОЗУ | нет |
 | SSH-ключ через консоль, копия `mtd0…mtd3` по SSH со сверкой sha256 | initramfs в ОЗУ | нет |
-| Сборка тома `factory` из `mtd0-vendor.bin` | ПК | нет |
-| `ubiformat` области `ubi`, тома, OpenWrt, чтение обратно | initramfs в ОЗУ | **да** (0x700000–0x1be00000) |
-| TFTP загрузчика кусками по 128 КиБ, `flash erase/write 0x600000`, сверка `cmp.b` | AXON U-Boot | **да** (0x600000–0x700000) |
-| `setenv bootcmd …; saveenv` — только для U-Boot OpenWrt | AXON U-Boot | окружение AXON |
-| `reset`, ожидание OpenWrt, проверка `board_name` | — | нет |
+| Сборка тома `factory` из `mtd0-vendor.bin` (для проверки MAC в конце) | ПК | нет |
+| TFTP `chainload-uboot.itb` кусками по 128 КиБ, `flash erase/write 0x600000`, сверка `cmp.b`; `setenv bootcmd …; saveenv` | AXON U-Boot | **да** (0x600000–0x700000, окружение AXON) |
+| `flash erase 0x700000 0x1b700000` | AXON U-Boot | **да** (0x700000–0x1be00000) |
+| `reset`: UBI с ubootenv, ubootenv2, factory; `initramfs-recovery.itb` по TFTP | чейнлоадер OpenWrt | **да** (UBI) |
+| SSH-ключ, загрузка `recovery.itb` и `sysupgrade.itb`, `ubimkvol recovery`, `sysupgrade -n` | система рекавери в ОЗУ | **да** (recovery, fit, rootfs_data, factory) |
+| Ожидание OpenWrt, проверка `board_name` и MAC WAN | — | нет |
+| Только с `-Loader http`: http-uboot в слот, `reset`, ожидание OpenWrt | AXON U-Boot | **да** (0x600000–0x700000) |
+
+Стоковый UBI `system` дальше в области `ubi` подключился бы без ошибок и не дал бы
+чейнлоадеру разметить UBI, поэтому вся область сначала стирается. Том `recovery`
+создаётся до `sysupgrade`: тот отдаёт `rootfs_data` всё оставшееся место.
+
+`-Mode InstallLegacy` (устаревший) размечает UBI из временной системы:
+`ubiformat`, тома и том `factory`, собранный на ПК (`router/install-ubi.sh`), затем
+пишется загрузчик.
 
 `xr1710g-ram-uboot.itb` — это `chainload-uboot.itb`, в обоих DTB которого метка
 раздела `ubi` заменена на `ubz` (см. `tools/make-ram-uboot.sh`). Этот U-Boot читает
@@ -236,9 +262,9 @@ OpenWrt для W1700K: этот загрузчик читает слот чер�
 
 Последний шаг установки отдельно: стоковым U-Boot записать выбранный загрузчик в
 слот `0x600000`, настроить `bootcmd` и дождаться OpenWrt. Область `ubi` не
-трогается, копия не снимается. Нужен, если Install оборвался после разметки
-UBI 2.0 (в журнале есть «UBI 2.0 размечен»), а также чтобы сменить
-http-uboot на загрузчик OpenWrt или обратно.
+трогается, копия не снимается. Нужен, чтобы сменить http-uboot на загрузчик
+OpenWrt или обратно, а также если `InstallLegacy` оборвался после разметки UBI 2.0
+(в журнале есть «UBI 2.0 размечен»).
 
 ## Разметка UBI 2.0
 
@@ -280,11 +306,11 @@ fan_id @0x7000, серийный номер @0x8000), `3 recovery` (initramfs Op
   from flash»).
   Загрузчик из `xr1710g-r5` … `r7` (его ставили прежние версии скрипта) ищет
   TFTP-сервер на `192.168.1.10`: задайте ПК этот адрес или поставьте загрузчик
-  r8 режимом `-Mode Loader -Loader openwrt`.
+  r18 режимом `-Mode Loader -Loader openwrt`.
 * Переход с `xr1710g-r2` … `r4`: они ставили compat version 2.0, от которой
   потом отказались, и sysupgrade новых сборок отказывается. Сначала
   `uci set system.@system[0].compat_version=1.0 && uci commit system`.
-  Chainloader sysupgrade не обновляет: чтобы получить загрузчик r8 с рекавери
+  Chainloader sysupgrade не обновляет: чтобы получить загрузчик r18 с рекавери
   по кнопке, запустите `-Mode Loader -Loader openwrt`.
 
 ## Если что-то пошло не так
@@ -297,16 +323,18 @@ fan_id @0x7000, серийный номер @0x8000), `3 recovery` (initramfs Op
   один запрос до ПК не дошёл; `timeout: …` — что пакеты теряются по дороге) — проверьте, что кабель в гигабитном LAN-порту; что на
   адаптере ПК нет другого адреса из `192.168.1.0/24` (старого ручного
   `192.168.1.10`): поставьте DHCP, адрес скрипт задаст сам. Сторонние брандмауэры (не Windows) нужно открыть для UDP 69.
-* **Ошибка до шага «Разметка UBI 2.0»** — во флеш ничего не записано, сток
-  загрузится как обычно, можно запускать заново.
-* **Ошибка после разметки, до записи загрузчика** — сток уже стёрт, но
-  вендорский загрузчик цел: допишите загрузчик режимом
-  `-Mode Loader -Loader <ваш выбор>`.
+* **Ошибка до подтверждения** — во флеш ничего не записано, сток загрузится как
+  обычно, можно запускать заново.
+* **Ошибка после стирания области `ubi`** — сток уже стёрт, но вендорский
+  загрузчик и чейнлоадер на месте: чейнлоадер так и будет грузить систему рекавери
+  по TFTP, пока не получит её, — запустите Install ещё раз (он сначала снимет копию
+  стёртого флеша; сохраните прежнюю папку с копией).
 * **OpenWrt не загрузился после записи загрузчика** — `serial.log`. С
   http-uboot роутер сам уйдёт в веб-рекавери, если не найдёт `fit`.
 
-Ручной путь, по которому идёт скрипт, — команды стокового загрузчика из
-[инструкции OpenWrt](https://github.com/openwrt/openwrt/pull/22397):
+Ручной путь, по которому скрипт идёт после копии (ПК `192.168.1.254/24` с
+TFTP-сервером, как в коммите «airoha: add support for Gemtek XR1710G» из
+[`xr1710g-r18`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r18)):
 
 ```
 setenv serverip 192.168.1.254 ; setenv ipaddr 192.168.1.1
@@ -317,8 +345,14 @@ setenv bootcmd "$one$two"
 saveenv
 flash erase 0x600000 0x100000
 flash write 0x600000 0x100000 0x89000000
+flash erase 0x700000 0x1b700000
 reset
 ```
+
+Дальше чейнлоадер создаёт UBI и загружает по TFTP
+`openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb`; в этой системе
+(`192.168.1.1`) создайте том `recovery` из того же файла (по желанию) и запустите
+`sysupgrade -n` с `squashfs-sysupgrade.itb`.
 
 ## Файлы
 
@@ -327,20 +361,21 @@ reset
 | `xr1710g-flash.ps1`, `xr1710g-flash.cmd` | этот репозиторий | |
 | `router/install-ubi.sh` | этот репозиторий; порядок и размеры томов, сборка `factory` — из `install.sh` [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer/blob/46df1f5282f53c6757752354d7b6702f6fa54ec5/files/installer/install.sh) | |
 | `firmware/xr1710g-chainloader-slot.bin` | [YYH2913/http-uboot, релиз `xr1710g_260805`](https://github.com/YYH2913/http-uboot/releases/tag/xr1710g_260805) | `deaefed3…d27be30` |
-| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r8`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r8) (коммит `c2235765d1`) | `85ed1978…c21ca4` |
-| `firmware/openwrt-…-initramfs-recovery.itb` | там же | `e984690c…440b5d64` |
-| `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `fd3e1bbe…6c7a41` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `cf32aee4…4e080` |
-| `firmware/xr1710g-ram-uboot.itb` | `tools/make-ram-uboot.sh` из `chainload-uboot.itb` | `aa7a6486…c0fe8cb` |
+| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r18`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r18) (коммит `3e351b5e11`) | `bc5f2df2…87b314` |
+| `firmware/openwrt-…-initramfs-recovery.itb` | там же | `a52d184e…26af1f` |
+| `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `d633953d…0b74aa` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `87b4008e…6e12dd` |
+| `firmware/xr1710g-ram-uboot.itb` | `tools/make-ram-uboot.sh` из `chainload-uboot.itb` | `eb2c5721…197928` |
 | `firmware/xr1710g-stock-5.1.1.12-tclinux.bin` | стоковый образ прошивки (FIP с подписанным tclinux `XR1710G_fw_5.1.1.12`, `0x2966000` байт) со стокового XR1710G, одинаковый в обоих его банках | `4b3a3191…408cc83f` |
 
 Полные суммы — в `firmware/SHA256SUMS`, скрипт сверяет их при каждом запуске.
 
-Сборка OpenWrt `xr1710g-r8` — ветка `main-gemtek-xr1710g` (OpenWrt main,
-ядро 6.18.55, поддержка XR1710G на модели W1700K и исправления 10G-линков,
-U-Boot 2026.07 со своей конфигурацией XR1710G); `xr1710g-r2` из той же ветки
-скриптом на железе установлена и загружается (28.10.2026). Через `-Firmware`
-можно поставить любую другую сборку под `gemtek,xr1710g-ubi` с UBI 2.0.
+Сборка OpenWrt `xr1710g-r18` — ветка `main-gemtek-xr1710g` (OpenWrt main,
+ядро 6.18.60, поддержка XR1710G на общем с W1700K дереве устройств, исправления
+10G-линков, U-Boot 2026.07 со своей конфигурацией XR1710G, которая размечает UBI на
+стёртом разделе, и sysupgrade, пересобирающий том `factory` из раздела vendor).
+Через `-Firmware` можно поставить любую другую сборку под `gemtek,xr1710g-ubi` с
+UBI 2.0.
 
 ## Источники и авторство
 
@@ -381,7 +416,7 @@ Brightspeed), она лежит здесь только чтобы вернут�
 ## Тесты
 
 ```powershell
-.\tests\run-fake.ps1          # сквозной прогон на эмуляторе: Backup (ru), Install x2, Backup прошитого роутера, Loader, Restore (как есть, стоковый образ, другой дамп, отказ), отказ UBI 1.0
+.\tests\run-fake.ps1          # сквозной прогон на эмуляторе: Backup (ru), Install x2 (через чейнлоадер), InstallLegacy, Backup прошитого роутера, Loader, Restore (как есть, стоковый образ, другой дамп, отказ), отказ UBI 1.0
 ```
 
 ```sh

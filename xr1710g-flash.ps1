@@ -6,25 +6,30 @@
 .DESCRIPTION
     Drives the router's boot loader over a USB-UART adapter and serves the files
     from its own TFTP server. Install mode:
-      1. Stock U-Boot (AXON): stop autoboot, save printenv, TFTP the OpenWrt
-         U-Boot into RAM and boot the OpenWrt initramfs from it. Nothing is
-         written to flash and the environment is not saved at this stage.
+      1. Stock U-Boot (AXON): stop autoboot, save printenv, TFTP a copy of the OpenWrt
+         U-Boot that never touches UBI into RAM and boot the OpenWrt initramfs from
+         it. Nothing is written to flash and the environment is not saved.
       2. initramfs in RAM: every flash partition (vendor, chainloader, ubi,
          reserved_bmt) is copied to the PC over SSH and checked with sha256;
          the factory volume is built on the PC from vendor (DSD + EEPROM).
-      3. After confirmation: ubiformat and the UBI 2.0 volumes (ubootenv,
-         ubootenv2, factory, recovery, fit + rootfs_data), read back.
-      4. Stock U-Boot: the chosen loader goes into the chainloader slot
-         (0x600000, 1 MiB) with its own flash write and is read back, bootcmd
-         is changed if needed, then the router reboots into OpenWrt.
+      3. After confirmation, stock U-Boot: the OpenWrt chainloader goes into the
+         slot (0x600000, 1 MiB) and is read back, bootcmd is set for it, and the
+         ubi area is erased.
+      4. The chainloader creates UBI (ubootenv, ubootenv2, factory) and loads
+         initramfs-recovery.itb over TFTP; in that recovery system the script
+         adds the recovery volume and runs sysupgrade, which fills factory from
+         the vendor partition. OpenWrt boots from flash; with -Loader http the
+         http-uboot slot is written at the end.
 
+    InstallLegacy (deprecated) lays UBI out from the backup initramfs itself
+    (ubiformat, volumes, factory built on the PC) and writes the loader after.
     Backup mode runs steps 1-2 and reboots the router into the stock firmware.
     Restore mode writes the stock firmware back from such a backup.
-    Loader mode runs step 4 only: finish an Install that stopped after the UBI
-    layout was written, or switch the loader on an installed router.
+    Loader mode writes the loader only: finish an InstallLegacy that stopped after
+    the UBI layout, or switch the loader on an installed router.
 
 .PARAMETER Mode
-    Install (default), Backup, Restore or Loader.
+    Install (default), InstallLegacy (deprecated), Backup, Restore or Loader.
 .PARAMETER Loader
     http - YYH2913's U-Boot with HTTP recovery; openwrt - OpenWrt chainloaded U-Boot.
     Asked interactively when not given.
@@ -55,7 +60,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Install', 'Backup', 'Restore', 'Loader')]
+    [ValidateSet('Install', 'InstallLegacy', 'Backup', 'Restore', 'Loader')]
     [string]$Mode = 'Install',
     [ValidateSet('', 'http', 'openwrt')]
     [string]$Loader = '',
@@ -702,8 +707,14 @@ function Enter-RamLinux {
         if ($try -ge 3) { Fail (T 'U-Boot rejects the initramfs image in RAM (see serial.log)' 'U-Boot отвергает образ initramfs в ОЗУ (см. serial.log)') }
         Warn (T "the initramfs image in RAM was rejected, loading it again ($try of 3)" "образ initramfs в ОЗУ отвергнут, загружаю заново ($try из 3)")
     }
-    if ($script:C.WaitFor('Please press Enter to activate this console', $m, (Scale 240)) -lt 0) {
-        Fail (T 'the initramfs did not boot within 4 minutes' 'initramfs не загрузился за 4 минуты')
+    Enter-LinuxShell $m 240
+}
+
+# Wait for an OpenWrt RAM system (backup initramfs or recovery) booting after output
+# position $m, open its console and put the SSH key in.
+function Enter-LinuxShell([int]$m, [int]$timeout) {
+    if ($script:C.WaitFor('Please press Enter to activate this console', $m, (Scale $timeout)) -lt 0) {
+        Fail ((T 'the OpenWrt RAM system did not boot within {0} s (see serial.log)' 'система OpenWrt в ОЗУ не загрузилась за {0} с (см. serial.log)') -f $timeout)
     }
     Start-Sleep -Seconds 2
     $m = $script:C.Mark()
@@ -1032,6 +1043,70 @@ function New-Factory([string]$vendorFile, [string]$outFile, [int]$eraseSize = 0x
 # ---------------------------------------------------------------------------
 # UBI 2.0 and loader install
 # ---------------------------------------------------------------------------
+# The install of the OpenWrt chainloader from xr1710g-r17 on: the stock U-Boot writes the
+# chainloader to the slot and erases the ubi area; on the next boot the chainloader finds
+# no UBI there, creates it with the ubootenv, ubootenv2 and (empty) factory volumes and,
+# with nothing to boot, loads initramfs-recovery.itb over TFTP from the PC. In that
+# recovery system the script adds the recovery volume and runs sysupgrade, which fills
+# factory from the vendor partition (Wi-Fi calibration, MACs) and installs OpenWrt.
+function Install-Chainloader([string]$kind, [string]$sysupgrade, [string]$dir) {
+    $m = Restart-ToStock
+    Enter-StockUboot (T 'Rebooting into the stock U-Boot to write the loader' 'Перезагрузка в стоковый U-Boot для записи загрузчика') $m
+    Write-Slot (Join-Path $FwDir $Files.OpenWrtUboot) 'U-Boot OpenWrt (chainload-uboot.itb)'
+    Set-Bootcmd 'openwrt'
+    Say (T 'Erasing the ubi area (0x700000-0x1be00000, irreversible: the stock firmware goes here)' 'Стирание области ubi (0x700000-0x1be00000, необратимо: здесь стирается сток)')
+    # The stock system UBI would attach fine and stop the chainloader from formatting it,
+    # so the whole area is erased; on erased flash the chainloader builds UBI itself.
+    $o = Invoke-Uboot 'flash erase 0x700000 0x1b700000' 600
+    if ($o -match '(?i)fail|error') { Fail "flash erase: $($o.Trim())" }
+    $script:Tftp.Add($Files.Recovery, (Join-Path $FwDir $Files.Recovery))
+    Say (T 'Rebooting: the OpenWrt U-Boot creates UBI and loads the recovery system over TFTP' 'Перезагрузка: U-Boot OpenWrt создаёт UBI и загружает систему рекавери по TFTP')
+    $m = $script:C.Mark()
+    $script:C.Send("reset`r")
+    Enter-LinuxShell $m 600
+
+    Say (T 'Uploading files to the router (RAM)' 'Загрузка файлов на роутер (в ОЗУ)')
+    Invoke-Ssh 'rm -rf /tmp/xr && mkdir -p /tmp/xr' | Out-Null
+    $up = [ordered]@{ 'recovery.itb' = (Join-Path $FwDir $Files.Recovery); 'sysupgrade.itb' = $sysupgrade }
+    foreach ($k in $up.Keys) {
+        Invoke-Ssh "cat > /tmp/xr/$k" 300 -In $up[$k] | Out-Null
+        $remote = (Invoke-Ssh "sha256sum /tmp/xr/$k").Out.Split(' ')[0].Trim()
+        if ($remote -ne (Get-Sha256 $up[$k])) { Fail (T "$k was damaged in transfer" "$k повредился при передаче") }
+        Info "$k ok"
+    }
+    # Before sysupgrade: it gives rootfs_data all the space left
+    Say (T 'Recovery volume (the recovery system in flash, "Boot recovery system from flash")' 'Том recovery (система рекавери во флеше, «Boot recovery system from flash»)')
+    $r = Invoke-Ssh ('ubinfo /dev/ubi0 -N recovery >/dev/null 2>&1 || ubimkvol /dev/ubi0 -N recovery -s $(wc -c < /tmp/xr/recovery.itb) && ' +
+        'id=$(ubinfo /dev/ubi0 -N recovery | sed -n "s/^Volume ID: *\([0-9]*\).*/\1/p") && ' +
+        'ubiupdatevol /dev/ubi0_$id /tmp/xr/recovery.itb && echo XR_RECOVERY_OK; ubinfo -a | grep -E "^Name:"') 300 -Echo -NoFail
+    if ($r.Out -notmatch 'XR_RECOVERY_OK') { Fail (T 'could not write the recovery volume (output above)' 'не удалось записать том recovery (вывод выше)') }
+
+    Say (T 'sysupgrade: OpenWrt and the factory volume (irreversible flash write)' 'sysupgrade: OpenWrt и том factory (необратимая запись во флеш)')
+    $m = $script:C.Mark()
+    $script:C.Send("`rsysupgrade -n /tmp/xr/sysupgrade.itb`r")
+    Confirm-OpenWrtBoot $m 600
+    Test-Macs $dir
+    if ($kind -eq 'http') {
+        $m = Restart-ToStock
+        Enter-StockUboot (T 'Rebooting into the stock U-Boot to write http-uboot' 'Перезагрузка в стоковый U-Boot для записи http-uboot') $m
+        Complete-Loader 'http'
+        return
+    }
+    Show-Done $kind
+}
+
+# After sysupgrade built factory from vendor, the WAN MAC must be the one in DSD.
+function Test-Macs([string]$dir) {
+    $f = [IO.File]::ReadAllBytes((Join-Path $dir 'factory.bin'))
+    $want = (($f[0x5000..0x5005] | ForEach-Object { '{0:x2}' -f $_ }) -join ':')
+    $m = $script:C.Mark()
+    $script:C.Send("echo XR_`"`"MAC=`$(cat /sys/class/net/wan/address)`r")
+    if ($script:C.WaitFor('XR_MAC=([0-9a-fA-F:]{17})', $m, 10000) -lt 0) { Warn (T 'could not read the WAN MAC' 'не удалось прочитать MAC WAN'); return }
+    $got = $script:C.LastMatch.Groups[1].Value.ToLowerInvariant()
+    if ($got -eq $want) { Info (T "WAN MAC $got, as in the vendor partition" "MAC WAN $got, как в разделе vendor") }
+    else { Warn (T "WAN MAC $got, the vendor partition has $want" "MAC WAN $got, а в разделе vendor $want") }
+}
+
 function Install-Ubi([string]$dir, [string]$sysupgrade) {
     Say (T 'Uploading files to the router (RAM)' 'Загрузка файлов на роутер (в ОЗУ)')
     Invoke-Ssh 'rm -rf /tmp/xr && mkdir -p /tmp/xr' | Out-Null
@@ -1143,6 +1218,9 @@ function Complete-Loader([string]$kind) {
     }
     Set-Bootcmd $kind
     Wait-OpenWrt
+    Show-Done $kind
+}
+function Show-Done([string]$kind) {
     Say (T 'Done.' 'Готово.')
     Info (T "OpenWrt: http://$RouterIp (root has no password - set one)" "OpenWrt: http://$RouterIp (root без пароля - задайте пароль)")
     if ($kind -eq 'http') {
@@ -1156,8 +1234,12 @@ function Wait-OpenWrt {
     Say (T 'Rebooting into OpenWrt' 'Перезагрузка в OpenWrt')
     $m = $script:C.Mark()
     $script:C.Send("reset`r")
-    if ($script:C.WaitFor('Please press Enter to activate this console', $m, (Scale 300)) -lt 0) {
-        Fail (T 'OpenWrt did not boot within 5 minutes - see serial.log' 'OpenWrt не загрузился за 5 минут - смотрите serial.log')
+    Confirm-OpenWrtBoot $m 300
+}
+# OpenWrt from flash booting after output position $m: wait for it, check board_name.
+function Confirm-OpenWrtBoot([int]$m, [int]$timeout) {
+    if ($script:C.WaitFor('Please press Enter to activate this console', $m, (Scale $timeout)) -lt 0) {
+        Fail ((T 'OpenWrt did not boot within {0} s - see serial.log' 'OpenWrt не загрузился за {0} с - смотрите serial.log') -f $timeout)
     }
     Start-Sleep -Seconds 3
     $m = $script:C.Mark()
@@ -1294,7 +1376,7 @@ try {
     Say (T "XR1710G: mode $Mode, folder $BackupDir" "XR1710G: режим $Mode, папка $BackupDir")
     Test-Bundle
     $kind = ''
-    if ($Mode -eq 'Install') {
+    if ($Mode -in 'Install', 'InstallLegacy') {
         if ($Firmware) { $sysupgrade = (Resolve-Path -LiteralPath $Firmware).Path }
         Test-Sysupgrade $sysupgrade
         Info (T "firmware: $sysupgrade" "прошивка: $sysupgrade")
@@ -1382,7 +1464,7 @@ Wiring:
 "@) -ForegroundColor Green
     Enter-StockUboot (T 'Power the router on (if it is on, power it off and on)' 'Включите питание роутера (если включён - выключите и включите)')
     $envText = Invoke-Uboot 'printenv' 30
-    if ($Mode -in 'Install', 'Backup') {
+    if ($Mode -in 'Install', 'InstallLegacy', 'Backup') {
         Set-Content -LiteralPath (Join-Path $BackupDir 'stock-uboot-env.txt') -Encoding UTF8 `
             -Value (($envText -replace "`r", '') -split "`n" | Where-Object { $_ -match '^[A-Za-z0-9_.]+=' })
     }
@@ -1439,6 +1521,13 @@ The vendor loader (0x0-0x600000) and the BMT reserve at the end of flash are not
 будет стёрта, в слот chainloader запишется загрузчик '$kind'.
 Вендорский загрузчик (0x0-0x600000) и резерв BMT в конце флеша не трогаются.
 "@)
+    if ($Mode -eq 'Install') {
+        Install-Chainloader $kind $sysupgrade $BackupDir
+        Info (T "Stock backup: $BackupDir" "Копия стока: $BackupDir")
+        return
+    }
+    # InstallLegacy: the UBI installer of the first versions, from the backup initramfs
+    Warn (T 'InstallLegacy is deprecated: Install lets the OpenWrt chainloader lay out UBI' 'InstallLegacy устарел: в Install UBI размечает сам чейнлоадер OpenWrt')
     Install-Ubi $BackupDir $sysupgrade
     $m = Restart-ToStock
     Enter-StockUboot (T 'Rebooting into the stock U-Boot to write the loader' 'Перезагрузка в стоковый U-Boot для записи загрузчика') $m

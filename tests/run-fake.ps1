@@ -74,8 +74,10 @@ $r = Start-Router $s 7002 -Init
 $rc = Invoke-Flash 'install http' $s 7002 @('-Loader', 'http', '-BackupDir', "$Work\bk2")
 Check 'http: exit code 0' ($rc -eq 0)
 Check 'http: slot written' (@(Compare-Object (Get-Head "$s\mtd1.bin" 0 $slot.Length) $slot -SyncWindow 0).Count -eq 0)
-Check 'http: bootcmd unchanged' ((Get-Env $s).bootcmd -eq 'flash read 0x602100 0x4000000 $loadaddr; bootm')
+# Install sets the OpenWrt chainloader bootcmd first; the dual-entry http-uboot slot boots with it too
+Check 'http: bootcmd works with http-uboot' ((Get-Env $s).bootcmd -eq 'flash read 0x600000 0x100000 $loadaddr; bootm')
 Check 'http: OpenWrt installed' (Test-Path "$s\installed")
+Check 'http: installed with the OpenWrt chainloader, then http-uboot' ((Get-Content "$Work\bk2\flash.log" -Raw) -match 'Writing http-uboot')
 Check 'http: English messages' ((Get-Content "$Work\bk2\flash.log" -Raw -Encoding UTF8) -match 'Stock backup saved')
 Stop-Process $r -ErrorAction SilentlyContinue
 
@@ -86,6 +88,23 @@ $rc = Invoke-Flash 'install openwrt' $s 7003 @('-Loader', 'openwrt', '-BackupDir
 Check 'openwrt: exit code 0' ($rc -eq 0)
 Check 'openwrt: slot written' (@(Compare-Object (Get-Head "$s\mtd1.bin" 0 $owrt.Length) $owrt -SyncWindow 0).Count -eq 0)
 Check 'openwrt: bootcmd' ((Get-Env $s).bootcmd -eq 'flash read 0x600000 0x100000 $loadaddr; bootm')
+# the new install: ubi erased, UBI and the recovery system from the chainloader, sysupgrade
+$log3 = Get-Content "$Work\bk3\flash.log" -Raw -Encoding UTF8
+Check 'openwrt: ubi area erased by the stock U-Boot' ($log3 -match 'flash erase 0x700000 0x1b700000')
+Check 'openwrt: recovery volume before sysupgrade' (Test-Path "$s\recovery_vol")
+Check 'openwrt: installed by sysupgrade' ((Test-Path "$s\installed") -and (Get-Content "$s\installed") -eq (Get-FileHash "$Root\firmware\openwrt-airoha-an7581-gemtek_xr1710g-ubi-squashfs-sysupgrade.itb").Hash.ToLower())
+Check 'openwrt: WAN MAC from the vendor partition' ($log3 -match 'WAN MAC 02:11:22:33:44:50, as in the vendor partition')
+Check 'openwrt: no UBI installer from the PC' ($log3 -notmatch 'install-ubi\.sh')
+Stop-Process $r -ErrorAction SilentlyContinue
+
+# 3c. InstallLegacy (deprecated): the UBI installer from the backup initramfs
+$s = "$Work\state-legacy"
+$r = Start-Router $s 7011 -Init
+$rc = Invoke-Flash 'install legacy' $s 7011 @('-Mode', 'InstallLegacy', '-Loader', 'openwrt', '-BackupDir', "$Work\bk11")
+Check 'legacy: exit code 0' ($rc -eq 0)
+Check 'legacy: OpenWrt installed by install-ubi.sh' ((Test-Path "$s\installed") -and (Get-Content "$Work\bk11\flash.log" -Raw) -match 'XR_INSTALL_OK')
+Check 'legacy: deprecation warning' ((Get-Content "$Work\bk11\flash.log" -Raw) -match 'InstallLegacy is deprecated')
+Check 'legacy: bootcmd' ((Get-Env $s).bootcmd -eq 'flash read 0x600000 0x100000 $loadaddr; bootm')
 Stop-Process $r -ErrorAction SilentlyContinue
 
 # 3b. Backup of the router flashed in test 3: OpenWrt volumes mean "not stock"

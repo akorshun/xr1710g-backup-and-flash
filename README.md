@@ -7,13 +7,19 @@ It takes the router from the stock firmware to a working OpenWrt by itself:
 
 1. stops the stock boot loader over UART and **takes a full flash backup** to the
    PC (all 512 MiB, checked with sha256) before anything is written to flash;
-2. lays the flash out for **UBI 2.0** right away (`ubi` = `0x700000 + 0x1b700000`,
-   528 PEBs reserved for the vendor loader's BMT) and installs OpenWrt;
-3. writes **the loader of your choice** to the `chainloader` slot — U-Boot with
-   HTTP recovery (YYH2913) or the vanilla OpenWrt chainloaded U-Boot;
-4. reboots the router and checks that OpenWrt came up from flash.
+2. writes the OpenWrt chainloader to the `chainloader` slot and erases the `ubi`
+   area; the chainloader lays the flash out for **UBI 2.0** itself (`ubi` =
+   `0x700000 + 0x1b700000`, 528 PEBs reserved for the vendor loader's BMT) and
+   loads the OpenWrt recovery system over TFTP from the PC;
+3. in that recovery system adds the `recovery` volume and runs `sysupgrade`, which
+   fills the `factory` volume from the vendor partition (Wi-Fi calibration, MACs)
+   and installs OpenWrt;
+4. checks that OpenWrt came up from flash with the router's own MACs, and with
+   `-Loader http` puts **http-uboot** (YYH2913) into the slot at the end.
 
-There are also "backup only", "restore stock from a backup" and "loader only" modes.
+There are also "backup only", "restore stock from a backup" and "loader only" modes,
+and the earlier install (`-Mode InstallLegacy`, deprecated), which lays UBI out from
+the backup initramfs itself.
 Messages are in English or Russian: the script asks at start (`-Lang en` / `-Lang ru`
 skips the question).
 
@@ -29,11 +35,17 @@ skips the question).
 > [Restoring the stock firmware](#restoring-the-stock-firmware).
 
 > [!NOTE]
+> **The install through the chainloader** (`xr1710g-r17`/`r18`: stock U-Boot writes
+> the chainloader and erases `ubi`, the chainloader builds UBI and boots the recovery
+> system over TFTP, `sysupgrade` from there) was verified on hardware by hand on
+> 2026-11-02, from a restored stock flash. The script runs the same steps after the
+> backup; that sequence is covered by the emulator (`tests/`) and has not yet been
+> run end to end on hardware.
+>
 > **Verified on hardware (XR1710G, 2026-10-28):** stock backup, UBI 2.0 layout,
 > OpenWrt `xr1710g-r2` install and the OpenWrt loader (`-Loader openwrt`) — the
-> router boots OpenWrt, Ethernet and Wi-Fi (EEPROM from the factory volume) work.
-> `firmware/` now carries the newer `xr1710g-r8` build; its reset-button TFTP
-> recovery has not been run through the script on hardware yet.
+> router boots OpenWrt, Ethernet and Wi-Fi (EEPROM from the factory volume) work
+> (that is the install now kept as `-Mode InstallLegacy`).
 > **On 2026-10-31** the whole round trip on one unit: stock firmware back from an old
 > backup plus the stock image from `firmware/` → stock boots; Install with a fresh,
 > complete backup → OpenWrt boots with the router's MACs; Restore of that backup as
@@ -82,12 +94,14 @@ there; both work with the UBI 2.0 layout.
 | How to enter recovery | cable in the **10GbE** port, hold **reset** at power-on, release when the LED goes from red to "running" | PC `192.168.1.254/24` with a TFTP server in a **1 GbE** port (lan3/lan4, not 10GbE); power on, press **reset 1–2 s later** (held at power-on the SoC waits for a UART download) and hold it until the **blue** LED, about 15–20 s |
 | UART needed after install | no | no (a TFTP server is needed instead of a browser) |
 | Network in the loader | 10GbE | gigabit ports |
-| UBI rebuild | from the web UI, with a choice of 2.0 / 1.5 / 1.0 layout and factory restored from DSD | by hand from an initramfs |
-| AXON environment | unchanged: the slot is "dual-entry" and works with the stock `bootcmd` | `bootcmd` becomes `flash read 0x600000 0x100000 $loadaddr; bootm` (as in the OpenWrt instructions) |
-| Origin | binary from the author's release, sources in [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | built from [akorshun/openwrt `xr1710g-r8`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r8) |
+| UBI rebuild | from the web UI, with a choice of 2.0 / 1.5 / 1.0 layout and factory restored from DSD | by itself on an erased `ubi` area (ubootenv, ubootenv2, factory); `sysupgrade` fills factory from the vendor partition |
+| AXON environment | the slot is "dual-entry" and works with the stock `bootcmd` and with the OpenWrt one (Install sets the OpenWrt one first) | `bootcmd` becomes `flash read 0x600000 0x100000 $loadaddr; bootm` (as in the OpenWrt instructions) |
+| Origin | binary from the author's release, sources in [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | built from [akorshun/openwrt `xr1710g-r18`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r18) |
 
 Both boot OpenWrt from the `fit` volume; updates are a plain `sysupgrade`. If in
-doubt, take **http-uboot**: its recovery needs only a browser.
+doubt, take **http-uboot**: its recovery needs only a browser. Install always lays
+UBI out with the OpenWrt chainloader; with `-Loader http` it writes http-uboot into
+the slot once OpenWrt runs.
 You can switch loaders later with http-uboot's own web page or with
 `-Mode Loader`.
 
@@ -98,6 +112,7 @@ Download the repository (Code → Download ZIP, or `git clone`), unpack it, then
 
 ```powershell
 .\xr1710g-flash.ps1                              # install, asks for everything
+.\xr1710g-flash.ps1 -Mode InstallLegacy         # the earlier install (deprecated)
 .\xr1710g-flash.ps1 -Lang en                     # English messages, no language question
 .\xr1710g-flash.ps1 -ComPort COM5 -Loader http   # no questions about the port and loader
 .\xr1710g-flash.ps1 -Mode Backup                 # backup only, flash untouched
@@ -124,8 +139,10 @@ The script asks for administrator rights itself. Then it:
 2. asks you to **power the router on** — it stops autoboot itself;
 3. takes the backup (a few minutes), shows the serial number and MAC addresses;
 4. **asks for confirmation** (`YES`) before the first flash write;
-5. lays out UBI, installs OpenWrt, reboots, writes the loader, reboots again and
-   waits for OpenWrt.
+5. writes the OpenWrt chainloader, erases the `ubi` area and reboots; the
+   chainloader builds UBI and loads the recovery system from the script's TFTP
+   server; the script adds the `recovery` volume, runs `sysupgrade` and waits for
+   OpenWrt (with `-Loader http` it then writes http-uboot).
 
 About 10–15 minutes in total. All router console output goes to `serial.log`, the
 script's steps to `flash.log`; both are in the backup folder.
@@ -138,11 +155,21 @@ script's steps to `flash.log`; both are in the backup folder.
 | TFTP `xr1710g-ram-uboot.itb` into RAM, `bootm` | AXON U-Boot | no |
 | TFTP `xr1710g-backup-initramfs.itb` into RAM, `bootm` | OpenWrt U-Boot in RAM | no |
 | SSH key over the console, dump `mtd0…mtd3` over SSH with sha256 checks | initramfs in RAM | no |
-| Build the `factory` volume from `mtd0-vendor.bin` | PC | no |
-| `ubiformat` of the `ubi` area, volumes, OpenWrt, read back | initramfs in RAM | **yes** (0x700000–0x1be00000) |
-| TFTP the loader in 128 KiB pieces, `flash erase/write 0x600000`, check with `cmp.b` | AXON U-Boot | **yes** (0x600000–0x700000) |
-| `setenv bootcmd …; saveenv` — only for the OpenWrt U-Boot | AXON U-Boot | AXON environment |
-| `reset`, wait for OpenWrt, check `board_name` | — | no |
+| Build the `factory` volume from `mtd0-vendor.bin` (to check the MACs later) | PC | no |
+| TFTP `chainload-uboot.itb` in 128 KiB pieces, `flash erase/write 0x600000`, check with `cmp.b`; `setenv bootcmd …; saveenv` | AXON U-Boot | **yes** (0x600000–0x700000, AXON environment) |
+| `flash erase 0x700000 0x1b700000` | AXON U-Boot | **yes** (0x700000–0x1be00000) |
+| `reset`: UBI with ubootenv, ubootenv2, factory; `initramfs-recovery.itb` over TFTP | OpenWrt chainloader | **yes** (UBI) |
+| SSH key, upload `recovery.itb` and `sysupgrade.itb`, `ubimkvol recovery`, `sysupgrade -n` | recovery system in RAM | **yes** (recovery, fit, rootfs_data, factory) |
+| Wait for OpenWrt, check `board_name` and the WAN MAC | — | no |
+| `-Loader http` only: http-uboot into the slot, `reset`, wait for OpenWrt | AXON U-Boot | **yes** (0x600000–0x700000) |
+
+The stock `system` UBI further in the `ubi` area would attach fine and keep the
+chainloader from laying UBI out, so the whole area is erased first. The `recovery`
+volume is created before `sysupgrade`, which gives `rootfs_data` all the space left.
+
+`-Mode InstallLegacy` (deprecated) does the layout from the backup initramfs
+instead: `ubiformat`, the volumes and the `factory` volume built on the PC
+(`router/install-ubi.sh`), then the loader is written.
 
 `xr1710g-ram-uboot.itb` is `chainload-uboot.itb` with the label of the `ubi`
 partition changed to `ubz` in both of its device trees (see
@@ -243,9 +270,9 @@ the script warns about it.
 
 The last install step on its own: write the chosen loader to slot `0x600000` with
 the stock U-Boot, set `bootcmd` and wait for OpenWrt. The `ubi` area is not
-touched and no backup is taken. Use it when Install stopped after the UBI 2.0
-layout was written (the log says "UBI 2.0 laid out"), or to switch between
-http-uboot and the OpenWrt loader.
+touched and no backup is taken. Use it to switch between http-uboot and the
+OpenWrt loader, or when `InstallLegacy` stopped after the UBI 2.0 layout was
+written (the log says "UBI 2.0 laid out").
 
 ## UBI 2.0 layout
 
@@ -287,11 +314,11 @@ http-uboot web recovery pick **UBI 2.0** for such images.
   "Boot recovery system from flash").
   The loader from `xr1710g-r5` … `r7` (written by earlier versions of this
   script) looks for the TFTP server at `192.168.1.10` instead: give the PC that
-  address, or put the r8 loader in with `-Mode Loader -Loader openwrt`.
+  address, or put the r18 loader in with `-Mode Loader -Loader openwrt`.
 * Coming from `xr1710g-r2` … `r4`: those set the compat version to 2.0, which
   later builds dropped, so sysupgrade refuses them. First run
   `uci set system.@system[0].compat_version=1.0 && uci commit system`. The
-  chainloader is not updated by sysupgrade: to get the r8 loader with the
+  chainloader is not updated by sysupgrade: to get the r18 loader with the
   button recovery, run `-Mode Loader -Loader openwrt`.
 
 ## If something goes wrong
@@ -303,16 +330,18 @@ http-uboot web recovery pick **UBI 2.0** for such images.
   reached the PC; `timeout: …` means packets get lost on the way) — check that the cable is in a gigabit LAN port; check that the PC
   adapter has no other address from `192.168.1.0/24` (an old manual
   `192.168.1.10`): set it to DHCP and let the script set the address. Third-party firewalls (not Windows Firewall) need UDP 69 open.
-* **An error before the "UBI 2.0 layout" step** — nothing was written to flash,
-  the stock firmware boots as usual, just run the script again.
-* **An error after the layout, before the loader was written** — the stock firmware
-  is already erased, but the vendor loader is intact: run
-  `-Mode Loader -Loader <your choice>` to finish.
+* **An error before the confirmation** — nothing was written to flash, the stock
+  firmware boots as usual, just run the script again.
+* **An error after the `ubi` area was erased** — the stock firmware is gone, but the
+  vendor loader and the chainloader are in place: the chainloader keeps loading
+  the recovery system over TFTP until it gets it, so run Install again (it takes a
+  new backup of the erased flash first; keep the earlier backup folder).
 * **OpenWrt did not boot after the loader was written** — see `serial.log`. With
   http-uboot the router goes into web recovery by itself if it finds no `fit`.
 
-The manual path the script follows — stock loader commands from the
-[OpenWrt instructions](https://github.com/openwrt/openwrt/pull/22397):
+The manual path the script follows after the backup (PC `192.168.1.254/24` with a
+TFTP server, as in the commit "airoha: add support for Gemtek XR1710G" of
+[`xr1710g-r18`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r18)):
 
 ```
 setenv serverip 192.168.1.254 ; setenv ipaddr 192.168.1.1
@@ -323,8 +352,14 @@ setenv bootcmd "$one$two"
 saveenv
 flash erase 0x600000 0x100000
 flash write 0x600000 0x100000 0x89000000
+flash erase 0x700000 0x1b700000
 reset
 ```
+
+The chainloader then creates UBI and loads
+`openwrt-airoha-an7581-gemtek_xr1710g-ubi-initramfs-recovery.itb` over TFTP; in
+that system (`192.168.1.1`) create the `recovery` volume from the same file
+(optional) and run `sysupgrade -n` with the `squashfs-sysupgrade.itb`.
 
 ## Files
 
@@ -333,20 +368,21 @@ reset
 | `xr1710g-flash.ps1`, `xr1710g-flash.cmd` | this repository | |
 | `router/install-ubi.sh` | this repository; volume order and sizes and the `factory` build come from `install.sh` in [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer/blob/46df1f5282f53c6757752354d7b6702f6fa54ec5/files/installer/install.sh) | |
 | `firmware/xr1710g-chainloader-slot.bin` | [YYH2913/http-uboot, release `xr1710g_260805`](https://github.com/YYH2913/http-uboot/releases/tag/xr1710g_260805) | `deaefed3…d27be30` |
-| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, release `xr1710g-r8`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r8) (commit `c2235765d1`) | `85ed1978…c21ca4` |
-| `firmware/openwrt-…-initramfs-recovery.itb` | same | `e984690c…440b5d64` |
-| `firmware/openwrt-…-squashfs-sysupgrade.itb` | same | `fd3e1bbe…6c7a41` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` from `initramfs-recovery.itb` | `cf32aee4…4e080` |
-| `firmware/xr1710g-ram-uboot.itb` | `tools/make-ram-uboot.sh` from `chainload-uboot.itb` | `aa7a6486…c0fe8cb` |
+| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, release `xr1710g-r18`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r18) (commit `3e351b5e11`) | `bc5f2df2…87b314` |
+| `firmware/openwrt-…-initramfs-recovery.itb` | same | `a52d184e…26af1f` |
+| `firmware/openwrt-…-squashfs-sysupgrade.itb` | same | `d633953d…0b74aa` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` from `initramfs-recovery.itb` | `87b4008e…6e12dd` |
+| `firmware/xr1710g-ram-uboot.itb` | `tools/make-ram-uboot.sh` from `chainload-uboot.itb` | `eb2c5721…197928` |
 | `firmware/xr1710g-stock-5.1.1.12-tclinux.bin` | the stock firmware image (FIP with the signed `XR1710G_fw_5.1.1.12` tclinux, `0x2966000` bytes) from a stock XR1710G, identical in both of its banks | `4b3a3191…408cc83f` |
 
 Full sums are in `firmware/SHA256SUMS`; the script checks them on every run.
 
-The OpenWrt build `xr1710g-r8` comes from the `main-gemtek-xr1710g` branch
-(OpenWrt main, kernel 6.18.55, XR1710G support modelled on the W1700K plus 10G
-link fixes, U-Boot 2026.07 with its own XR1710G configuration); `xr1710g-r2` from
-the same branch was installed by the script and boots on hardware (2026-10-28). With `-Firmware`
-you can install any other build for `gemtek,xr1710g-ubi` with UBI 2.0.
+The OpenWrt build `xr1710g-r18` comes from the `main-gemtek-xr1710g` branch
+(OpenWrt main, kernel 6.18.60, XR1710G support sharing the W1700K device tree, 10G
+link fixes, U-Boot 2026.07 with its own XR1710G configuration that lays UBI out on an
+erased partition, and a sysupgrade that rebuilds the `factory` volume from the vendor
+partition). With `-Firmware` you can install any other build for
+`gemtek,xr1710g-ubi` with UBI 2.0.
 
 ## Sources and credits
 
@@ -389,7 +425,7 @@ is not covered by this repository's license.
 ## Tests
 
 ```powershell
-.\tests\run-fake.ps1          # end-to-end emulator run: Backup (ru), Install x2, Backup of a flashed router, Loader, Restore (as is, stock image, other dump, refusal), UBI 1.0 refusal
+.\tests\run-fake.ps1          # end-to-end emulator run: Backup (ru), Install x2 (via the chainloader), InstallLegacy, Backup of a flashed router, Loader, Restore (as is, stock image, other dump, refusal), UBI 1.0 refusal
 ```
 
 ```sh
