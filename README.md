@@ -38,9 +38,11 @@ skips the question).
 > **The install through the chainloader** (`xr1710g-r17`/`r18`: stock U-Boot writes
 > the chainloader and erases `ubi`, the chainloader builds UBI and boots the recovery
 > system over TFTP, `sysupgrade` from there) was verified on hardware by hand on
-> 2026-11-02, from a restored stock flash. The script runs the same steps after the
-> backup; that sequence is covered by the emulator (`tests/`) and has not yet been
-> run end to end on hardware.
+> 2026-11-02, from a restored stock flash, and **on 2026-11-03 end to end with the
+> script** (`-Loader openwrt`, from the stock firmware): the backup kept both stock
+> firmware banks, the chainloader built UBI and booted the recovery system over
+> TFTP, `sysupgrade` filled `factory` from the vendor partition — OpenWrt `r18` boots
+> with the router's own MACs and Wi-Fi calibration, LuCI answers at `192.168.1.1`.
 >
 > **Verified on hardware (XR1710G, 2026-10-28):** stock backup, UBI 2.0 layout,
 > OpenWrt `xr1710g-r2` install and the OpenWrt loader (`-Loader openwrt`) — the
