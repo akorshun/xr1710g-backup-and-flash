@@ -96,7 +96,7 @@
 | Сеть в загрузчике | 10GbE | гигабитные порты |
 | Пересоздание UBI | из веб-интерфейса, с выбором раскладки 2.0 / 1.5 / 1.0 и восстановлением factory из DSD | сам, на стёртой области `ubi` (ubootenv, ubootenv2, factory); `sysupgrade` заполняет factory из раздела vendor |
 | Окружение AXON | слот «двухвходовый», работает и со стоковым `bootcmd`, и с `bootcmd` OpenWrt (Install сначала ставит последний) | `bootcmd` меняется на `flash read 0x600000 0x100000 $loadaddr; bootm` (как в инструкции OpenWrt) |
-| Происхождение | бинарник из релиза автора, исходники в [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | собран из [akorshun/openwrt `xr1710g-r22`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r22) |
+| Происхождение | бинарник из релиза автора, исходники в [YYH2913/http-uboot](https://github.com/YYH2913/http-uboot) | собран из [akorshun/openwrt `xr1710g-r24-kmods`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r24-kmods) |
 
 Оба варианта загружают OpenWrt из тома `fit`, обновления ставятся обычным
 `sysupgrade`. Если сомневаетесь — берите **http-uboot**: для его рекавери
@@ -308,11 +308,11 @@ fan_id @0x7000, серийный номер @0x8000), `3 recovery` (initramfs Op
   from flash»).
   Загрузчик из `xr1710g-r5` … `r7` (его ставили прежние версии скрипта) ищет
   TFTP-сервер на `192.168.1.10`: задайте ПК этот адрес или поставьте загрузчик
-  r22 режимом `-Mode Loader -Loader openwrt`.
+  r24 режимом `-Mode Loader -Loader openwrt`.
 * Переход с `xr1710g-r2` … `r4`: они ставили compat version 2.0, от которой
   потом отказались, и sysupgrade новых сборок отказывается. Сначала
   `uci set system.@system[0].compat_version=1.0 && uci commit system`.
-  Chainloader sysupgrade не обновляет: чтобы получить загрузчик r22 с рекавери
+  Chainloader sysupgrade не обновляет: чтобы получить загрузчик r24 с рекавери
   по кнопке, запустите `-Mode Loader -Loader openwrt`.
 
 ## Если что-то пошло не так
@@ -336,7 +336,7 @@ fan_id @0x7000, серийный номер @0x8000), `3 recovery` (initramfs Op
 
 Ручной путь, по которому скрипт идёт после копии (ПК `192.168.1.254/24` с
 TFTP-сервером, как в коммите «airoha: add support for Gemtek XR1710G» из
-[`xr1710g-r22`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r22)):
+[`xr1710g-r24-kmods`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r24-kmods)):
 
 ```
 setenv serverip 192.168.1.254 ; setenv ipaddr 192.168.1.1
@@ -363,16 +363,16 @@ reset
 | `xr1710g-flash.ps1`, `xr1710g-flash.cmd` | этот репозиторий | |
 | `router/install-ubi.sh` | этот репозиторий; порядок и размеры томов, сборка `factory` — из `install.sh` [hurrian/w1700k-ubi-installer](https://github.com/hurrian/w1700k-ubi-installer/blob/46df1f5282f53c6757752354d7b6702f6fa54ec5/files/installer/install.sh) | |
 | `firmware/xr1710g-chainloader-slot.bin` | [YYH2913/http-uboot, релиз `xr1710g_260805`](https://github.com/YYH2913/http-uboot/releases/tag/xr1710g_260805) | `deaefed3…d27be30` |
-| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r22`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r22) (коммит `08dcbb9378`) | `07da1858…12cff4` |
-| `firmware/openwrt-…-initramfs-recovery.itb` | там же | `61202f6d…8a73ea` |
-| `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `18f77aec…522153` |
-| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `6dd0ee66…36c2a2` |
-| `firmware/xr1710g-ram-uboot.itb` | `tools/make-ram-uboot.sh` из `chainload-uboot.itb` | `3c9ade2f…a36c6c` |
+| `firmware/openwrt-…-chainload-uboot.itb` | [akorshun/openwrt, релиз `xr1710g-r24-kmods`](https://github.com/akorshun/openwrt/releases/tag/xr1710g-r24-kmods) (коммит `f9204c1488`) | `2fa46273…12b41e` |
+| `firmware/openwrt-…-initramfs-recovery.itb` | там же | `845ea220…bd8d83` |
+| `firmware/openwrt-…-squashfs-sysupgrade.itb` | там же | `0a61655d…7a31be` |
+| `firmware/xr1710g-backup-initramfs.itb` | `tools/make-backup-initramfs.py` из `initramfs-recovery.itb` | `0c5003e2…d7b15e` |
+| `firmware/xr1710g-ram-uboot.itb` | `tools/make-ram-uboot.sh` из `chainload-uboot.itb` | `cf392894…334bd0` |
 | `firmware/xr1710g-stock-5.1.1.12-tclinux.bin` | стоковый образ прошивки (FIP с подписанным tclinux `XR1710G_fw_5.1.1.12`, `0x2966000` байт) со стокового XR1710G, одинаковый в обоих его банках | `4b3a3191…408cc83f` |
 
 Полные суммы — в `firmware/SHA256SUMS`, скрипт сверяет их при каждом запуске.
 
-Сборка OpenWrt `xr1710g-r22` — ветка `main-gemtek-xr1710g` (OpenWrt main,
+Сборка OpenWrt `xr1710g-r24` — ветка `main-gemtek-xr1710g` (OpenWrt main,
 ядро 6.18.60, поддержка XR1710G на общем с W1700K дереве устройств, исправления
 10G-линков, U-Boot 2026.07 со своей конфигурацией XR1710G, которая размечает UBI на
 стёртом разделе, и sysupgrade, пересобирающий том `factory` из раздела vendor).
